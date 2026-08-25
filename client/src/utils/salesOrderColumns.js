@@ -38,7 +38,7 @@ export function shiftTime(v) {
 }
 
 // Imported counter sales use a completely different line grid: one row per DATE, showing
-// how the day's takings split across cash, GCash and bank deposit, what is still
+// how the day's takings split across cash, e-wallet and bank deposit, what is still
 // uncollected, and the VAT breakdown. None of the job/production columns below apply, so
 // the two grids are separate lists rather than one list with most cells blank.
 export const DAILY_COLLECTION_COLUMNS = [
@@ -56,12 +56,12 @@ export const DAILY_COLLECTION_COLUMNS = [
   },
   { key: 'cash', label: 'Cash', money: true },
   { key: 'collected_cash', label: 'Collected Cash', money: true, blankWhenZero: true, render: (r) => moneyOrBlank(r.collected_cash) },
-  { key: 'gcash', label: 'GCash', money: true },
-  { key: 'collected_gcash', label: 'Collected GCash', money: true, blankWhenZero: true, render: (r) => moneyOrBlank(r.collected_gcash) },
+  { key: 'gcash', label: 'E-wallet', money: true },
+  { key: 'collected_gcash', label: 'Collected E-wallet', money: true, blankWhenZero: true, render: (r) => moneyOrBlank(r.collected_gcash) },
   { key: 'collected_bank_deposit', label: 'Collected Bank Deposit / Collected Sales', money: true },
   { key: 'total_daily_sales', label: 'Total Daily Sales', money: true },
   { key: 'total_cash_to_deposit', label: 'Total Cash to be Deposited', money: true },
-  { key: 'total_gcash', label: 'Total GCash', money: true },
+  { key: 'total_gcash', label: 'Total E-wallet', money: true },
   { key: 'uncollected_sales', label: 'Uncollected Sales', money: true },
   { key: 'vat_ex', label: 'VAT EX', money: true },
   { key: 'vat_12', label: 'VAT 12%', money: true },

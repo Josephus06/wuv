@@ -83,10 +83,10 @@ export default function SalesOrderImport() {
   // Mirrors the server's own refusal conditions, so the operator sees the problem in the row
   // rather than in a failed save.
   function rowProblem(s) {
-    if (!near(num(s.cash) + num(s.gcash), num(s.total_daily_sales))) return 'Cash + GCash does not equal Total Daily Sales';
+    if (!near(num(s.cash) + num(s.gcash), num(s.total_daily_sales))) return 'Cash + E-wallet does not equal Total Daily Sales';
     if (!near(num(s.vat_ex) + num(s.vat_12), num(s.vat_inc))) return 'VAT EX + VAT 12% does not equal VAT (Inc.)';
     if (!near(num(s.collected_cash) + num(s.collected_gcash), num(s.collected_bank_deposit))) {
-      return `Collected Cash + Collected GCash must add up to ${money(s.collected_bank_deposit)}`;
+      return `Collected Cash + Collected E-wallet must add up to ${money(s.collected_bank_deposit)}`;
     }
     return null;
   }
@@ -211,7 +211,7 @@ export default function SalesOrderImport() {
                 {(s.warnings || []).map((w, j) => <li key={j}>{w}</li>)}
               </ul>
               <div style={{ marginTop: 6 }}>
-                Check the figures against the till and correct Cash / GCash below before creating the order.
+                Check the figures against the till and correct Cash / E-wallet below before creating the order.
               </div>
             </div>
           ))}
@@ -235,9 +235,9 @@ export default function SalesOrderImport() {
               <table>
                 <thead>
                   <tr>
-                    <th>Date</th><th>Branch / Shift</th><th>Cash</th><th>Collected Cash</th><th>GCash</th>
-                    <th>Collected GCash</th><th>Collected Bank Deposit / Collected Sales</th>
-                    <th>Total Daily Sales</th><th>Total Cash to be Deposited</th><th>Total GCash</th>
+                    <th>Date</th><th>Branch / Shift</th><th>Cash</th><th>Collected Cash</th><th>E-wallet</th>
+                    <th>Collected E-wallet</th><th>Collected Bank Deposit / Collected Sales</th>
+                    <th>Total Daily Sales</th><th>Total Cash to be Deposited</th><th>Total E-wallet</th>
                     <th>Uncollected Sales</th><th>VAT EX</th><th>VAT 12%</th><th>VAT (Inc.)</th>
                   </tr>
                 </thead>

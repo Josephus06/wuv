@@ -1230,12 +1230,13 @@ button.progress-bar:disabled { cursor: not-allowed; opacity: 0.6; }
   font-size: 9.5px; letter-spacing: 0.04em; color: #8c9b9c; text-align: center;
 }
 
-/* Both grids are far too wide for portrait -- it squeezes the money columns until they
-   wrap -- so the sheet claims a landscape page. Browsers without named-page support
-   simply print it portrait. */
-@page so-landscape { size: A4 landscape; margin: 10mm; }
+/* One sheet, portrait. The grids fit any width now that the table layout is fixed, so
+   there is nothing left to gain from a landscape page -- and a named @page cost a whole
+   extra sheet, since giving an element a page name different from the one in force forces
+   a break before it. The vertical rhythm below is tightened for the same reason: the sheet
+   has to clear an A4 page in one go. */
 @media print {
-  .so-sheet { max-width: none; padding: 0; page: so-landscape; }
+  .so-sheet { max-width: none; padding: 0; }
   .so-print-table-wrap { overflow: visible; }
   .so-sheet, .so-print-band, .so-print-table th, .so-print-table tbody tr:nth-child(even) td,
   .so-print-total-row td, .so-print-grand {
@@ -1243,6 +1244,41 @@ button.progress-bar:disabled { cursor: not-allowed; opacity: 0.6; }
   }
   /* Long grids may run to a second page; repeat the head and never split a row
      or the sign-off strip across the break. */
+  /* #root and .app-shell are min-height: 100vh so the screen layout fills the window.
+     Paged media honours that too, so the document is at least a viewport tall whatever
+     the sheet actually needs -- which spills a blank second page on any paper shorter
+     than the window. The sheet sizes itself; nothing here should claim viewport height. */
+  #root, .app-shell { min-height: 0; }
+  /* One sheet is the requirement, and an A4 page is only ~717px wide once margins are
+     taken off -- far narrower than the screen the sheet is laid out on, so everything
+     wraps taller in print than it looks in the browser. The detail blocks are the bulk of
+     it (four columns of label/value pairs at ~160px each), so they take the deepest cut.
+     An order carrying a GL Impact table is the tall case these numbers are set against. */
+  .so-letterhead { padding-bottom: 10px; }
+  .so-sheet .print-logo-img { height: 40px; }
+  .so-letterhead-address { margin-top: 6px; font-size: 9px; }
+  .so-letterhead-customer { font-size: 11px; }
+  .so-letterhead-customer strong { font-size: 12px; }
+
+  .so-print-band { padding: 6px 14px; margin-bottom: 12px; }
+  .so-print-band-title { font-size: 14px; }
+  .so-print-no { font-size: 12.5px; }
+
+  .so-print-info { gap: 8px 20px; }
+  .so-print-info .voucher-fields { font-size: 9.5px; gap: 2px 7px; }
+  .so-print-block-title { margin-bottom: 4px; padding-bottom: 3px; font-size: 9px; }
+
+  .so-print-section { margin: 12px 0 5px; font-size: 10.5px; }
+  .so-print-table th,
+  .so-print-table td { padding: 3.5px 5px; }
+
+  .so-print-totals { margin-top: 12px; font-size: 10.5px; }
+  .so-print-totals > div { padding: 3.5px 12px; }
+
+  .so-print-signatures { margin-top: 20px; }
+  .so-print-signatures .print-sig-label { margin-bottom: 14px; font-size: 9.5px; }
+  .so-print-signatures .print-sig-name { font-size: 10.5px; }
+  .so-print-footnote { margin-top: 12px; padding-top: 6px; font-size: 8.5px; }
   .so-print-table thead { display: table-header-group; }
   .so-print-table tr { page-break-inside: avoid; }
   .so-print-signatures, .so-print-totals { page-break-inside: avoid; }
