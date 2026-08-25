@@ -166,6 +166,25 @@ router.post('/import/preview', requireAuth, requirePermission(ROUTE, 'can_add'),
         continue;
       }
 
+      // A PDF that is just a picture of a report does not throw -- extraction succeeds and
+      // hands back the page furniture and nothing else (one real example: a 587KB file whose
+      // entire text was "-- 1 of 1 --", 16 characters, wrapped around a 1919x2122 JPEG). Left
+      // to fall through, the parsers would then say "this does not look like a Z-Reading
+      // report", which sends the operator hunting for the wrong document when the document
+      // was right and only the export was wrong. A real reading runs to thousands of
+      // characters, so anything this thin is diagnosed here while the cause is still visible.
+      if (text.replace(/\s/g, '').length < 200) {
+        shifts.push({
+          ok: false, source_file: file.originalname,
+          errors: [
+            'This PDF has no text in it -- it is an image of the report (a scan, a photo, or a '
+            + 'screenshot saved as a PDF), so there is nothing to read. Export the Z-Reading to '
+            + 'PDF from the POS itself rather than scanning or screenshotting the print-out.',
+          ],
+        });
+        continue;
+      }
+
       // Two Z-Reading formats are accepted, told apart by the document itself rather than
       // by asking the operator which one they are holding. The consolidated report is
       // checked first: its title also contains "Z-READING", so the per-shift parser would
