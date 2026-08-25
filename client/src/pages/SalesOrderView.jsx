@@ -6,7 +6,7 @@ import SalesInvoiceModal from '../components/SalesInvoiceModal';
 import DeliveryTicketModal from '../components/DeliveryTicketModal';
 import LoadingSpinner from '../components/LoadingSpinner';
 import {
-  STATUS_LABELS, DAILY_COLLECTION_COLUMNS, LINE_COLUMNS, money, salesOrderTotals,
+  STATUS_LABELS, DAILY_COLLECTION_COLUMNS, LINE_COLUMNS, money, moneyOrBlank, salesOrderTotals,
 } from '../utils/salesOrderColumns';
 
 // Read-only Sales Order detail -- mirrors EstimateView.jsx's layout (banner + 4-column
@@ -205,7 +205,7 @@ export default function SalesOrderView() {
                         than by intent. */}
                     {DAILY_COLLECTION_COLUMNS.slice(1).map((c) => (
                       <td key={c.key}>
-                        {c.money && <strong>{money(lines.reduce((s, l) => s + Number(l[c.key] || 0), 0))}</strong>}
+                        {c.money && <strong>{(c.blankWhenZero ? moneyOrBlank : money)(lines.reduce((s, l) => s + Number(l[c.key] || 0), 0))}</strong>}
                       </td>
                     ))}
                   </tr>

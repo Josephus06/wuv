@@ -1144,8 +1144,16 @@ button.progress-bar:disabled { cursor: not-allowed; opacity: 0.6; }
 /* Wider than the estimate sheet this inherits from: both line grids run past 960px
    even at the compact cell size below. */
 .so-sheet { max-width: 1180px; padding: 34px 40px 26px; }
-.so-letterhead { align-items: center; border-bottom: 3px solid var(--so-brand); padding-bottom: 14px; margin-bottom: 0; }
-.so-letterhead .print-company-address { font-size: 11.5px; line-height: 1.5; }
+/* Us on the left under the mark, them on the right. flex-start rather than centre: the
+   two sides are different heights and should share a top edge, not a midline. */
+.so-letterhead { align-items: flex-start; border-bottom: 3px solid var(--so-brand); padding-bottom: 14px; margin-bottom: 0; }
+.so-letterhead-address { margin-top: 8px; font-size: 10.5px; line-height: 1.5; color: #5c6a6b; }
+.so-letterhead-customer { max-width: 46%; text-align: right; font-size: 12px; line-height: 1.5; color: #333; }
+.so-letterhead-customer strong { font-size: 13.5px; color: #1c2626; }
+.so-letterhead-customer-label {
+  margin-bottom: 3px; font-size: 9.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.12em; color: var(--so-brand);
+}
 .so-sheet .print-logo { color: var(--so-brand); }
 
 /* Title band -- hangs off the letterhead rule like a tab, echoing the stepped
@@ -1183,12 +1191,27 @@ button.progress-bar:disabled { cursor: not-allowed; opacity: 0.6; }
 .so-print-table th { background: var(--so-brand); color: #fff; border-color: var(--so-brand); font-weight: 600; }
 .so-print-table tbody tr:nth-child(even) td { background: var(--so-brand-zebra); }
 .so-print-total-row td { background: var(--so-brand-tint); border-top: 2px solid var(--so-brand); }
-/* Fifteen columns of money on the daily grid, twenty-six on the item grid: only a
-   tighter cell keeps the figures on one line each, even in landscape. On screen the
-   grid scrolls inside the sheet rather than spilling out of it; print needs the whole
-   width, and a scroll container would clip it there. */
+/* Fifteen columns on the daily grid, twenty-six on the item grid. Left to size itself,
+   the table takes its min-content width and runs off the right edge of the sheet -- on
+   screen that reads as data missing, and on paper it is genuinely gone. table-layout:
+   fixed makes the columns share the width they actually have and wrap what does not fit,
+   so every column is on the page at every window size. The scroll container stays only as
+   a floor for a very narrow window, and is switched off for print where it would clip. */
+.so-print-table { table-layout: fixed; width: 100%; }
+/* white-space: normal undoes the app-wide `th, td { white-space: nowrap }` further up --
+   without it the fixed columns cannot wrap and the headers just overlap each other.
+   Wrapping happens at spaces only: breaking inside a word turns "Description" into
+   "Descrip tion", which costs more legibility than the line it saves. */
 .so-print-table th,
-.so-print-table td { padding: 5px 6px; font-size: 9.5px; }
+.so-print-table td { padding: 5px 6px; font-size: 9.5px; white-space: normal; overflow-wrap: normal; }
+/* Money reads wrong broken across lines -- 16,702.00 split after the comma is a different
+   number at a glance. The figures are short, so they keep their line and the long text
+   headers absorb the wrapping instead. */
+.so-print-table td.num { white-space: nowrap; }
+/* The item grid carries twenty-six columns against the daily grid's fifteen, so it only
+   fits the page a size down. Same table, denser setting -- not a different design. */
+.so-print-table--dense th,
+.so-print-table--dense td { padding: 4px 4px; font-size: 8px; }
 .so-print-table-wrap { overflow-x: auto; }
 
 .so-print-totals {

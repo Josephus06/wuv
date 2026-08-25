@@ -4,7 +4,7 @@ import api from '../api/client';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { COMPANY } from '../config/company';
 import {
-  STATUS_LABELS, DAILY_COLLECTION_COLUMNS, LINE_COLUMNS, money, salesOrderTotals,
+  STATUS_LABELS, DAILY_COLLECTION_COLUMNS, LINE_COLUMNS, money, moneyOrBlank, salesOrderTotals,
 } from '../utils/salesOrderColumns';
 
 // Sales Order hand-out. Shares the estimate/voucher print sheet, but carries the company
@@ -63,19 +63,29 @@ export default function SalesOrderPrint() {
         <button className="btn btn-primary" onClick={() => window.print()}>Print</button>
       </div>
 
-      <div className={"print-sheet so-sheet"}>
+      <div className="print-sheet so-sheet">
+        {/* Left names us, right names them. The logo already carries the company name, so
+            repeating it opposite would say nothing -- the corner a reader checks first for
+            "who is this for" holds the customer instead, and the company's address details
+            sit under the mark that identifies them. */}
         <div className="print-letterhead so-letterhead">
-          {/* The company logo lives at client/public/company-logo.png. If it is ever missing
-              the name alone still prints, rather than a broken-image icon. */}
-          {logoOk
-            ? <img src="/company-logo.png" alt={COMPANY.name} className="print-logo-img" onError={() => setLogoOk(false)} />
-            : <div className="print-logo">{COMPANY.short}</div>}
-          <div className="print-company-address">
-            <strong>{COMPANY.name}</strong><br />
-            {COMPANY.addressLine1}{COMPANY.addressLine1 && <br />}
-            {COMPANY.addressLine2}{COMPANY.addressLine2 && <br />}
-            {COMPANY.phone && <>Tel. {COMPANY.phone}<br /></>}
-            {COMPANY.website}
+          <div className="so-letterhead-us">
+            {/* The company logo lives at client/public/company-logo.png. If it is ever missing
+                the name alone still prints, rather than a broken-image icon. */}
+            {logoOk
+              ? <img src="/company-logo.png" alt={COMPANY.name} className="print-logo-img" onError={() => setLogoOk(false)} />
+              : <div className="print-logo">{COMPANY.short}</div>}
+            <div className="so-letterhead-address">
+              {COMPANY.addressLine1}{COMPANY.addressLine1 && <br />}
+              {COMPANY.addressLine2}{COMPANY.addressLine2 && <br />}
+              {COMPANY.phone && <>Tel. {COMPANY.phone}<br /></>}
+              {COMPANY.website}
+            </div>
+          </div>
+          <div className="so-letterhead-customer">
+            <div className="so-letterhead-customer-label">Customer</div>
+            <strong>{so.customer_name}</strong>
+            {so.contact_name && <><br />Attn: {so.contact_name}</>}
           </div>
         </div>
 
@@ -88,8 +98,9 @@ export default function SalesOrderPrint() {
         </div>
 
         <div className="so-print-info">
+          {/* No 'Customer' row: the letterhead already names them, and a hand-out that
+              states the same name twice invites the reader to check whether they differ. */}
           <Block title="Customer Details" rows={[
-            ['Customer', so.customer_name],
             ['Contact Name', so.contact_name],
             ['Contact Title', so.contact_title],
             ['Contact Email', so.contact_email],
@@ -131,7 +142,7 @@ export default function SalesOrderPrint() {
 
         <h3 className="so-print-section">{isDailyCollections ? 'Daily Sales & Collections' : 'Items'}</h3>
         <div className="so-print-table-wrap">
-          <table className="print-table so-print-table">
+          <table className={`print-table so-print-table${isDailyCollections ? '' : ' so-print-table--dense'}`}>
             <thead>
               <tr>
                 {!isDailyCollections && <th className="num">#</th>}
@@ -167,7 +178,7 @@ export default function SalesOrderPrint() {
                   <td colSpan={isDailyCollections ? 1 : 3}><strong>Total</strong></td>
                   {columns.slice(1).map((c) => (
                     <td key={c.key} className={c.money ? 'num' : undefined}>
-                      {c.money && <strong>{money(lines.reduce((s, l) => s + Number(l[c.key] || 0), 0))}</strong>}
+                      {c.money && <strong>{(c.blankWhenZero ? moneyOrBlank : money)(lines.reduce((s, l) => s + Number(l[c.key] || 0), 0))}</strong>}
                     </td>
                   ))}
                 </tr>
@@ -223,6 +234,11 @@ export default function SalesOrderPrint() {
             <div className="print-sig-line">&nbsp;</div>
           </div>
           <div>
+            <div className="print-sig-label">Acknowledge By:</div>
+            <div className="print-sig-name">&nbsp;</div>
+            <div className="print-sig-line">&nbsp;</div>
+          </div>
+          <div>
             <div className="print-sig-label">Checked By:</div>
             <div className="print-sig-name">&nbsp;</div>
             <div className="print-sig-line">&nbsp;</div>
@@ -230,11 +246,6 @@ export default function SalesOrderPrint() {
           <div>
             <div className="print-sig-label">Approved By:</div>
             <div className="print-sig-name">{so.approved_by_name || '\u00A0'}</div>
-            <div className="print-sig-line">&nbsp;</div>
-          </div>
-          <div>
-            <div className="print-sig-label">Received By:</div>
-            <div className="print-sig-name">&nbsp;</div>
             <div className="print-sig-line">&nbsp;</div>
           </div>
         </div>

@@ -21,6 +21,14 @@ export function money(v) {
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
 
+// The collected columns are filled in by whoever banks the day's takings, not by the
+// Z-Reading import, which only knows what the till rang up. Printing 0.00 there asserts a
+// collection of zero; blank says nobody has recorded one yet, which is what is true. Any
+// figure actually entered still prints -- only the untouched zero is left empty.
+export function moneyOrBlank(v) {
+  return Number(v || 0) === 0 ? '' : money(v);
+}
+
 // Just the clock time: the date is already the row's first column, and a shift opens and
 // closes on the day it belongs to.
 export function shiftTime(v) {
@@ -47,9 +55,9 @@ export const DAILY_COLLECTION_COLUMNS = [
     render: (r) => [r.pos_cashier, shiftTime(r.pos_closed_at)].filter(Boolean).join(' · '),
   },
   { key: 'cash', label: 'Cash', money: true },
-  { key: 'collected_cash', label: 'Collected Cash', money: true },
+  { key: 'collected_cash', label: 'Collected Cash', money: true, blankWhenZero: true, render: (r) => moneyOrBlank(r.collected_cash) },
   { key: 'gcash', label: 'GCash', money: true },
-  { key: 'collected_gcash', label: 'Collected GCash', money: true },
+  { key: 'collected_gcash', label: 'Collected GCash', money: true, blankWhenZero: true, render: (r) => moneyOrBlank(r.collected_gcash) },
   { key: 'collected_bank_deposit', label: 'Collected Bank Deposit / Collected Sales', money: true },
   { key: 'total_daily_sales', label: 'Total Daily Sales', money: true },
   { key: 'total_cash_to_deposit', label: 'Total Cash to be Deposited', money: true },
