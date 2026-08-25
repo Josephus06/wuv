@@ -5,6 +5,7 @@ const { requireAuth, requirePermission } = require('../middleware/auth');
 const { getSalesRepEmployeeScope } = require('../lib/salesVisibility');
 const { extractPdfText } = require('../lib/posCategorySales');
 const { parseZReading } = require('../lib/posZReading');
+const { parseConsolidatedZReading, isConsolidatedZReading } = require('../lib/posConsolidatedZReading');
 const { computeSalesOrderGl } = require('../lib/glImpact');
 
 const router = express.Router();
@@ -165,7 +166,11 @@ router.post('/import/preview', requireAuth, requirePermission(ROUTE, 'can_add'),
         continue;
       }
 
-      const parsed = parseZReading(text);
+      // Two Z-Reading formats are accepted, told apart by the document itself rather than
+      // by asking the operator which one they are holding. The consolidated report is
+      // checked first: its title also contains "Z-READING", so the per-shift parser would
+      // happily claim it and then fail to find a single field.
+      const parsed = isConsolidatedZReading(text) ? parseConsolidatedZReading(text) : parseZReading(text);
 
       // Surfaced, not blocked -- the operator sees which order already covers this shift.
       // The unique index on the line is what actually enforces it at save time.

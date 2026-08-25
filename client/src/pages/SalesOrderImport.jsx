@@ -9,6 +9,13 @@ function money(v) {
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
 
+// How a shift is labelled on screen. The consolidated Z-Reading prints no branch code -- it
+// identifies itself by trading name and Z counter range -- so joining on '/' unconditionally
+// left a leading slash on every one of its rows.
+function shiftLabel(s) {
+  return [s.branch_code, s.shift].filter(Boolean).join('/') || '—';
+}
+
 // Imports POS Z-Reading shift reports as a Sales Order's daily cash & collections grid --
 // one PDF per shift, one row per shift, several at once because a day runs more than one
 // shift and a sheet covers a period.
@@ -247,7 +254,7 @@ export default function SalesOrderImport() {
                     return (
                       <tr key={s.import_key} title={problem || ''}>
                         <td>{s.sale_date}</td>
-                        <td>{s.branch_code}/{s.shift}</td>
+                        <td>{shiftLabel(s)}</td>
                         {/* Editable, unlike the rest of the printed figures. A POS that prints
                             a tender split not adding to its own net sales (branch 786 is six
                             pesos out) would otherwise be unimportable forever -- the operator
@@ -319,7 +326,7 @@ export default function SalesOrderImport() {
           {usable.map((s) => (
             <div className="card" style={{ marginTop: 16 }} key={`detail-${s.import_key}`}>
               <h3 className="subsection" style={{ marginTop: 0 }}>
-                {s.branch_code}/{s.shift} — {s.sale_date} · OR {s.beginning_or} → {s.ending_or}
+                {shiftLabel(s)} — {s.sale_date} · OR {s.beginning_or} → {s.ending_or}
               </h3>
               {/* Who had the till and when. The closing cashier becomes the order's Sales Rep
                   where that name matches an employee record. */}
