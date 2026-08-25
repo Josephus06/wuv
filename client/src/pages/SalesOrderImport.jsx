@@ -211,6 +211,23 @@ export default function SalesOrderImport() {
           {/* The report was read fine but its own figures disagree. Shown in the milder tone
               and separately from the refusals above: the row is still importable once the
               operator settles the difference in the grid. */}
+          {/* A consolidated reading already contains the shifts it consolidates, so importing
+              it alongside one of them books that shift's takings twice. Not a duplicate -- the
+              documents genuinely differ -- so nothing else catches it, and the operator is the
+              one who knows which of the two they meant to keep. */}
+          {usable.filter((s) => s.overlap).map((s) => (
+            <div className="warning-banner" style={{ marginTop: 16 }} key={`ovl-${s.import_key}`}>
+              <strong>{s.source_file}</strong> ({s.shift}) covers the same till and day as{' '}
+              <strong>{s.overlap.sales_order_no || s.overlap.source_file}</strong>
+              {s.overlap.shift ? ` (${s.overlap.shift})` : ''}
+              {s.overlap.total_daily_sales ? `, worth ${money(s.overlap.total_daily_sales)}` : ''}.
+              <div style={{ marginTop: 6 }}>
+                One of these already includes the other&apos;s takings. Importing both records the
+                same sales twice — drop whichever one you did not mean to keep.
+              </div>
+            </div>
+          ))}
+
           {usable.filter((s) => (s.warnings || []).length).map((s) => (
             <div className="warning-banner" style={{ marginTop: 16 }} key={`warn-${s.import_key}`}>
               <strong>{s.source_file}</strong> — this report does not agree with itself:

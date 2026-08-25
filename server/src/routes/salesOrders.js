@@ -5,7 +5,9 @@ const { requireAuth, requirePermission } = require('../middleware/auth');
 const { getSalesRepEmployeeScope } = require('../lib/salesVisibility');
 const { extractPdfText } = require('../lib/posCategorySales');
 const { parseZReading } = require('../lib/posZReading');
-const { parseConsolidatedZReading, isConsolidatedZReading } = require('../lib/posConsolidatedZReading');
+const {
+  parseBirZReading, isBirZReading, birKeyParts, birReadingsOverlap,
+} = require('../lib/posBirZReading');
 const { computeSalesOrderGl } = require('../lib/glImpact');
 
 const router = express.Router();
@@ -185,11 +187,11 @@ router.post('/import/preview', requireAuth, requirePermission(ROUTE, 'can_add'),
         continue;
       }
 
-      // Two Z-Reading formats are accepted, told apart by the document itself rather than
-      // by asking the operator which one they are holding. The consolidated report is
-      // checked first: its title also contains "Z-READING", so the per-shift parser would
-      // happily claim it and then fail to find a single field.
-      const parsed = isConsolidatedZReading(text) ? parseConsolidatedZReading(text) : parseZReading(text);
+      // Two Z-Reading families are accepted, told apart by the document itself rather than by
+      // asking the operator which one they are holding. The BIR layout is checked first: its
+      // title also contains "Z-READING", so the other parser would claim it and then fail to
+      // find a single field.
+      const parsed = isBirZReading(text) ? parseBirZReading(text) : parseZReading(text);
 
       // Surfaced, not blocked -- the operator sees which order already covers this shift.
       // The unique index on the line is what actually enforces it at save time.
@@ -205,7 +207,43 @@ router.post('/import/preview', requireAuth, requirePermission(ROUTE, 'can_add'),
         duplicate = row || null;
       }
 
-      shifts.push({ ...parsed, source_file: file.originalname, duplicate });
+      // A consolidated reading and a per-shift reading of the same till on the same day are
+      // not duplicates -- different documents, different Z counters, different keys, so
+      // nothing above and no unique index catches them -- but the consolidated one already
+      // contains the shift. Importing both books that shift's takings twice. The Z counter
+      // ranges are what tell that apart from the legitimate case of importing Z-375 and Z-376
+      // separately, which add up to the day rather than overlapping it.
+      let overlap = null;
+      const parts = birKeyParts(parsed.import_key);
+      if (parts) {
+        const [candidates] = await pool.query(
+          `SELECT so.sales_order_no, sol.pos_import_key, sol.pos_shift, sol.total_daily_sales
+           FROM sales_order_lines sol
+           JOIN sales_orders so ON so.id = sol.sales_order_id
+           WHERE sol.sale_date = ? AND sol.pos_import_key LIKE ?`,
+          [parts.date, `ZC:${parts.machine}/%`]
+        );
+        const clash = candidates.find(
+          (c) => c.pos_import_key !== parsed.import_key && birReadingsOverlap(parsed.import_key, c.pos_import_key)
+        );
+        if (clash) {
+          overlap = {
+            sales_order_no: clash.sales_order_no, shift: clash.pos_shift,
+            total_daily_sales: clash.total_daily_sales,
+          };
+        }
+      }
+
+      shifts.push({ ...parsed, source_file: file.originalname, duplicate, overlap });
+    }
+
+    // The same clash, but between two files attached in one go -- neither is in the database
+    // yet, so the query above cannot see it. Both sides are flagged: which of the two to drop
+    // is the operator's call, not ours.
+    for (const a of shifts) {
+      if (a.overlap || !a.import_key) continue;
+      const b = shifts.find((o) => o !== a && o.import_key && birReadingsOverlap(a.import_key, o.import_key));
+      if (b) a.overlap = { source_file: b.source_file, shift: b.shift, total_daily_sales: b.row?.total_daily_sales };
     }
 
     // Chronological, so the grid reads like the sheet regardless of the order the files were

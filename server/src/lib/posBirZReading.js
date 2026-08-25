@@ -1,7 +1,15 @@
-// Parser for the BIR-style "CONSOLIDATED Z-READING REPORT", the second Z-Reading format the
-// Sales Order import accepts. Where posZReading.js reads one shift from one till, this one
-// reads a whole trading period already consolidated by the POS -- the Z counter range and the
-// shifts summary say how many shifts went into it.
+// Parser for the BIR-style Z-Reading, the second format the Sales Order import accepts. The
+// POS prints it two ways off the same layout, and both come through here:
+//
+//   CONSOLIDATED Z-READING REPORT  -- a whole trading period, "Z Counter Range 375 - 376",
+//                                     with a SHIFTS SUMMARY listing each shift it covers
+//   Z-READING REPORT               -- a single shift, "Z Counter No. 375", no shifts summary
+//
+// The two differ only in those three particulars; every label, section and figure below is
+// identical, so they share a parser rather than being copied apart. What tells this family
+// from the per-shift report posZReading.js handles is not the title -- both say "Z-READING" --
+// but the section headings BREAKDOWN OF SALES and TRANSACTION SUMMARY, which only this layout
+// prints.
 //
 // The document is a flat list of "Label <value>" lines under section headings (BREAKDOWN OF
 // SALES, DISCOUNT SUMMARY, SALES ADJUSTMENT, VAT ADJUSTMENT, TRANSACTION SUMMARY, SHIFTS
@@ -114,18 +122,22 @@ function stampFor(text, label) {
   return { date: d ? toIsoDate(d[0]) : null, time: to24h(raw.slice(d ? d[0].length : 0)) };
 }
 
-function isConsolidatedZReading(rawText) {
-  return /CONSOLIDATED\s+Z\s*-?\s*READING/i.test(String(rawText || ''));
+// Both variants, told apart from the other POS's Z-Reading by their section headings rather
+// than by a title they share.
+function isBirZReading(rawText) {
+  const text = String(rawText || '');
+  if (!/Z\s*-?\s*READING/i.test(text)) return false;
+  return /BREAKDOWN\s+OF\s+SALES/i.test(text) || /TRANSACTION\s+SUMMARY/i.test(text);
 }
 
-function parseConsolidatedZReading(rawText) {
+function parseBirZReading(rawText) {
   const text = String(rawText || '').replace(/\r/g, '');
   const errors = [];
   const warnings = [];
   const checks = [];
 
-  if (!isConsolidatedZReading(text)) {
-    return { ok: false, errors: ['This does not look like a Consolidated Z-Reading report.'] };
+  if (!isBirZReading(text)) {
+    return { ok: false, errors: ['This does not look like a BIR Z-Reading report.'] };
   }
 
   // The first lines are the store block: trading name, then "Operated By", then the address.
@@ -140,9 +152,11 @@ function parseConsolidatedZReading(rawText) {
   const end = stampFor(text, 'End Date & Time');
   const reportDate = fieldFor(text, 'Report Date', DATE);
 
-  // "Z Counter Range 375 - 376", or a single counter on a one-shift day.
+  // "Z Counter Range 375 - 376" on the consolidated report; "Z Counter No. 375" on a single
+  // shift. Range first, so the second pattern cannot claim the first number of a range.
   const zRange = /Z\s*Counter\s*Range[^\n\d]*(\d+)(?:\s*-\s*(\d+))?/i.exec(text);
-  const zFrom = zRange ? zRange[1] : null;
+  const zSingle = zRange ? null : /Z\s*Counter\s*No\.?[^\n\d]*(\d+)/i.exec(text);
+  const zFrom = zRange ? zRange[1] : (zSingle ? zSingle[1] : null);
   const zTo = zRange && zRange[2] ? zRange[2] : zFrom;
 
   const f = {
@@ -285,6 +299,13 @@ function parseConsolidatedZReading(rawText) {
     );
   }
 
+  // Consolidated if it says so, or if it carries the range and shift list only that variant
+  // prints. A single-shift report is not less trustworthy, just narrower -- but the two cover
+  // overlapping money for the same day, so which one this is has to be visible.
+  const consolidated = /CONSOLIDATED/i.test(text)
+    || !!(zRange && zRange[2])
+    || shiftsSummary.length > 1;
+
   const saleDate = end.date || start.date;
   const shiftLabel = zFrom ? (zTo && zTo !== zFrom ? `${zFrom}-${zTo}` : zFrom) : null;
   // MIN identifies the machine and is unique per terminal, which is what makes one trading
@@ -297,7 +318,8 @@ function parseConsolidatedZReading(rawText) {
     errors,
     warnings,
     checks,
-    format: 'consolidated_z_reading',
+    format: consolidated ? 'consolidated_z_reading' : 'shift_z_reading',
+    consolidated,
     store_name: storeName,
     operated_by: operatedBy ? collapse(operatedBy[1]) : null,
     tin: tin ? tin[1] : null,
@@ -359,4 +381,26 @@ function parseConsolidatedZReading(rawText) {
   };
 }
 
-module.exports = { parseConsolidatedZReading, isConsolidatedZReading };
+// The import key of this family reads back as machine, Z counter range and trading date:
+//   ZC:26021016463289840/375-376|2026-08-23
+// which is enough to tell whether two readings cover any of the same till time.
+function birKeyParts(key) {
+  const m = /^ZC:(.+?)\/(\d+)(?:-(\d+))?\|(\d{4}-\d{2}-\d{2})$/.exec(String(key || ''));
+  if (!m) return null;
+  return { machine: m[1], from: Number(m[2]), to: Number(m[3] || m[2]), date: m[4] };
+}
+
+// Two readings from the same till on the same day whose Z counter ranges intersect are
+// reporting some of the same money twice. This is what separates a legitimate pair -- the
+// per-shift reports Z-375 and Z-376, which add up to the day -- from a dangerous one: the
+// consolidated Z-375-376 alongside either of them, which double counts a shift. Only the
+// ranges can tell those apart, which is why the key carries them.
+function birReadingsOverlap(keyA, keyB) {
+  const a = birKeyParts(keyA);
+  const b = birKeyParts(keyB);
+  if (!a || !b) return false;
+  if (a.machine !== b.machine || a.date !== b.date) return false;
+  return a.from <= b.to && b.from <= a.to;
+}
+
+module.exports = { parseBirZReading, isBirZReading, birKeyParts, birReadingsOverlap };
