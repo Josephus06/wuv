@@ -24,6 +24,7 @@ import EstimatePrint from './pages/EstimatePrint';
 import SalesOrders from './pages/SalesOrders';
 import SalesOrderImport from './pages/SalesOrderImport';
 import SalesOrderView from './pages/SalesOrderView';
+import SalesOrderPrint from './pages/SalesOrderPrint';
 import JobOrders from './pages/JobOrders';
 import JobOrderView from './pages/JobOrderView';
 import JobOrderEdit from './pages/JobOrderEdit';
@@ -194,6 +195,7 @@ function App() {
         <Route path="/sales-orders" element={<SalesOrders />} />
         <Route path="/sales-orders/import" element={<SalesOrderImport />} />
         <Route path="/sales-orders/:id" element={<SalesOrderView />} />
+        <Route path="/sales-orders/:id/print" element={<SalesOrderPrint />} />
         <Route path="/non-standard-job-orders" element={<NonStandardJobOrders />} />
         <Route path="/non-standard-job-orders/:id" element={<NonStandardJobOrderView />} />
         <Route path="/non-standard-sales-orders" element={<NonStandardSalesOrders />} />

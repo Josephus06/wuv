@@ -1124,6 +1124,108 @@ button.progress-bar:disabled { cursor: not-allowed; opacity: 0.6; }
 .print-sig-name { margin-bottom: 4px; }
 .print-sig-line { border-top: 1px solid #999; padding-top: 4px; color: #777; }
 
+/* ---------------------------------------------------------------------------
+   Sales Order print-out. Reuses the estimate print sheet and the voucher's
+   label/value lists, then carries the company logo's teal -- #075056, sampled
+   straight out of client/public/company-logo.png -- through the letterhead
+   rule, the title band, the table heads and the grand total, so the sheet reads
+   as the same identity as the logo printed at the top of it.
+
+   Backgrounds carry meaning here rather than decoration (the band names the
+   document, the head separates itself from the data), so they opt out of the
+   browser's "don't print backgrounds" default via print-color-adjust below.
+   --------------------------------------------------------------------------- */
+:root {
+  --so-brand: #075056;
+  --so-brand-tint: #e6eff0;
+  --so-brand-line: #d3e2e3;
+  --so-brand-zebra: #f6fafa;
+}
+/* Wider than the estimate sheet this inherits from: both line grids run past 960px
+   even at the compact cell size below. */
+.so-sheet { max-width: 1180px; padding: 34px 40px 26px; }
+.so-letterhead { align-items: center; border-bottom: 3px solid var(--so-brand); padding-bottom: 14px; margin-bottom: 0; }
+.so-letterhead .print-company-address { font-size: 11.5px; line-height: 1.5; }
+.so-sheet .print-logo { color: var(--so-brand); }
+
+/* Title band -- hangs off the letterhead rule like a tab, echoing the stepped
+   blocks in the logo mark. */
+.so-print-band {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  background: var(--so-brand); color: #fff;
+  padding: 9px 16px; margin-bottom: 22px; border-radius: 0 0 6px 6px;
+}
+.so-print-band-title {
+  display: flex; align-items: baseline; gap: 12px;
+  font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em;
+}
+.so-print-no { font-size: 14px; font-weight: 600; letter-spacing: 0.04em; color: #b9d6d8; }
+.so-print-status {
+  flex-shrink: 0; font-size: 10px; text-transform: uppercase; letter-spacing: 0.09em;
+  border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 3px 12px;
+}
+
+/* The four detail blocks sit side by side, as they do on screen. A block with nothing
+   in it drops out and leaves its column blank. */
+.so-print-info { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px 32px; margin-bottom: 6px; }
+.so-print-info .voucher-fields { font-size: 11.5px; gap: 4px 10px; }
+.so-print-block-title {
+  margin: 0 0 7px; padding-bottom: 4px; border-bottom: 1px solid var(--so-brand-line);
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--so-brand);
+}
+
+.so-print-section {
+  display: flex; align-items: center; gap: 10px; margin: 24px 0 8px;
+  font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em; color: var(--so-brand);
+}
+.so-print-section::after { content: ''; flex: 1; height: 1px; background: var(--so-brand-line); }
+
+.so-print-table th { background: var(--so-brand); color: #fff; border-color: var(--so-brand); font-weight: 600; }
+.so-print-table tbody tr:nth-child(even) td { background: var(--so-brand-zebra); }
+.so-print-total-row td { background: var(--so-brand-tint); border-top: 2px solid var(--so-brand); }
+/* Fifteen columns of money on the daily grid, twenty-six on the item grid: only a
+   tighter cell keeps the figures on one line each, even in landscape. On screen the
+   grid scrolls inside the sheet rather than spilling out of it; print needs the whole
+   width, and a scroll container would clip it there. */
+.so-print-table th,
+.so-print-table td { padding: 5px 6px; font-size: 9.5px; }
+.so-print-table-wrap { overflow-x: auto; }
+
+.so-print-totals {
+  width: 300px; margin: 24px 0 0 auto; font-size: 12px;
+  border: 1px solid var(--so-brand-line); border-radius: 6px; overflow: hidden;
+}
+.so-print-totals > div { display: flex; justify-content: space-between; gap: 16px; padding: 6px 14px; }
+.so-print-totals > div + div { border-top: 1px solid var(--so-brand-tint); }
+.so-print-grand { background: var(--so-brand); color: #fff; font-weight: 700; border-top: none !important; }
+
+.so-print-signatures { margin-top: 40px; }
+.so-print-signatures .print-sig-label { margin-bottom: 26px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--so-brand); }
+.so-print-signatures .print-sig-name { font-size: 12px; }
+.so-print-footnote {
+  margin-top: 24px; padding-top: 8px; border-top: 1px solid var(--so-brand-line);
+  font-size: 9.5px; letter-spacing: 0.04em; color: #8c9b9c; text-align: center;
+}
+
+/* Both grids are far too wide for portrait -- it squeezes the money columns until they
+   wrap -- so the sheet claims a landscape page. Browsers without named-page support
+   simply print it portrait. */
+@page so-landscape { size: A4 landscape; margin: 10mm; }
+@media print {
+  .so-sheet { max-width: none; padding: 0; page: so-landscape; }
+  .so-print-table-wrap { overflow: visible; }
+  .so-sheet, .so-print-band, .so-print-table th, .so-print-table tbody tr:nth-child(even) td,
+  .so-print-total-row td, .so-print-grand {
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  /* Long grids may run to a second page; repeat the head and never split a row
+     or the sign-off strip across the break. */
+  .so-print-table thead { display: table-header-group; }
+  .so-print-table tr { page-break-inside: avoid; }
+  .so-print-signatures, .so-print-totals { page-break-inside: avoid; }
+}
+
+
 /* ---- General mobile polish: page chrome shared by every page (header/button rows,
    side-by-side form fields, modals) rather than anything page-specific -- individual
    pages already wrap their own wide tables in .table-wrap/.spreadsheet-wrap, which

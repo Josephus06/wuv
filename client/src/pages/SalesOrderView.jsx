@@ -5,95 +5,16 @@ import { useAuth } from '../context/useAuth';
 import SalesInvoiceModal from '../components/SalesInvoiceModal';
 import DeliveryTicketModal from '../components/DeliveryTicketModal';
 import LoadingSpinner from '../components/LoadingSpinner';
+import {
+  STATUS_LABELS, DAILY_COLLECTION_COLUMNS, LINE_COLUMNS, money, salesOrderTotals,
+} from '../utils/salesOrderColumns';
 
 // Read-only Sales Order detail -- mirrors EstimateView.jsx's layout (banner + 4-column
 // details + tabs + totals footer), since the real system's Sales Order screen is
 // structurally the estimate screen's sibling. No process sub-rows here (the real
 // system's "Items" tab is flatter than the estimate's "Job" tab), and no
-// Approve/Disapprove/Print actions since orders don't go through that workflow --
-// they exist because the estimate they came from already did.
-const STATUS_LABELS = {
-  pending_for_jo: 'Pending for JO',
-  jo_in_process: 'JO In-Process',
-  pending_delivery: 'Pending Delivery',
-  partially_delivered: 'Partially Delivered',
-  pending_billing: 'Pending Billing',
-  pending_billing_partially_delivered: 'Pending Billing / Partially Delivered',
-  billed: 'Billed',
-  cancelled: 'Cancelled',
-};
-
-// Imported counter sales use a completely different line grid: one row per DATE, showing
-// how the day's takings split across cash, GCash and bank deposit, what is still
-// uncollected, and the VAT breakdown. None of the job/production columns below apply, so
-// the two grids are separate lists rather than one list with most cells blank.
-// Just the clock time: the date is already the row's first column, and a shift opens and
-// closes on the day it belongs to.
-function shiftTime(v) {
-  if (!v) return '';
-  const m = /\d{2}:\d{2}/.exec(String(v).slice(11));
-  return m ? m[0] : '';
-}
-
-const DAILY_COLLECTION_COLUMNS = [
-  { key: 'sale_date', label: 'Date', render: (r) => (r.sale_date ? String(r.sale_date).slice(0, 10) : '') },
-  // Who had the till, from the Z-Reading's own OPENED/CLOSED lines.
-  {
-    key: 'pos_opened_by',
-    label: 'Opened By',
-    render: (r) => [r.pos_opened_by, shiftTime(r.pos_opened_at)].filter(Boolean).join(' · '),
-  },
-  {
-    key: 'pos_cashier',
-    label: 'Closed By',
-    render: (r) => [r.pos_cashier, shiftTime(r.pos_closed_at)].filter(Boolean).join(' · '),
-  },
-  { key: 'cash', label: 'Cash', money: true },
-  { key: 'collected_cash', label: 'Collected Cash', money: true },
-  { key: 'gcash', label: 'GCash', money: true },
-  { key: 'collected_gcash', label: 'Collected GCash', money: true },
-  { key: 'collected_bank_deposit', label: 'Collected Bank Deposit / Collected Sales', money: true },
-  { key: 'total_daily_sales', label: 'Total Daily Sales', money: true },
-  { key: 'total_cash_to_deposit', label: 'Total Cash to be Deposited', money: true },
-  { key: 'total_gcash', label: 'Total GCash', money: true },
-  { key: 'uncollected_sales', label: 'Uncollected Sales', money: true },
-  { key: 'vat_ex', label: 'VAT EX', money: true },
-  { key: 'vat_12', label: 'VAT 12%', money: true },
-  { key: 'vat_inc', label: 'VAT (Inc.)', money: true },
-];
-
-const LINE_COLUMNS = [
-  { key: 'job_type_name', label: 'Job Type' },
-  { key: 'job_location_name', label: 'Job Location' },
-  { key: 'description', label: 'Description' },
-  { key: 'quantity', label: 'Qty' },
-  { key: 'quantity_built', label: 'Built', render: (r) => (r.job_order_id ? Number(r.quantity_built || 0) : '') },
-  { key: 'quantity_inspected', label: 'QI', render: (r) => (r.job_order_id ? Number(r.quantity_inspected || 0) : '') },
-  { key: 'quantity_delivered', label: 'Delivered', render: (r) => (r.job_order_id ? Number(r.quantity_delivered || 0) : '') },
-  { key: 'quantity_invoiced', label: 'Invoiced', render: (r) => (r.job_order_id ? Number(r.quantity_invoiced || 0) : '') },
-  { key: 'units', label: 'Units' },
-  { key: 'price_per_unit', label: 'Price/Unit' },
-  { key: 'subtotal', label: 'Subtotal' },
-  { key: 'disc_percent', label: 'Disc %' },
-  { key: 'disc_amount', label: 'Disc Amt' },
-  { key: 'disc_price_per_unit', label: 'Disc Price/Unit' },
-  { key: 'tax_code', label: 'Tax Code' },
-  { key: 'length', label: 'Length' },
-  { key: 'width', label: 'Width' },
-  { key: 'height', label: 'Height' },
-  { key: 'uom', label: 'UOM' },
-  { key: 'remarks', label: 'Remarks' },
-  { key: 'memo', label: 'Memo' },
-  { key: 'delivery_date', label: 'Delivery Date', render: (r) => (r.delivery_date ? String(r.delivery_date).slice(0, 10) : '') },
-  { key: 'delivery_time', label: 'Delivery Time' },
-  { key: 'gp_rate', label: 'GP Rate', render: (r) => (r.gp_rate != null ? `${r.gp_rate}%` : '') },
-];
-
-function num(v) { return v === null || v === undefined || v === '' ? 0 : Number(v); }
-function money(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
-}
+// Approve/Disapprove since orders don't go through that workflow -- they exist because
+// the estimate they came from already did. Print opens the hand-out sheet in a new tab.
 
 export default function SalesOrderView() {
   const { id } = useParams();
@@ -161,18 +82,7 @@ export default function SalesOrderView() {
   // (fully) invoiced -- mirrors the Create SI form's own eligibility filter.
   const hasInvoiceableLine = lines.some((l) => l.job_order_id && Number(l.quantity_delivered || 0) > Number(l.quantity_invoiced || 0));
   const canEdit = can('/sales-orders', 'can_edit');
-  // The daily collections grid carries its own VAT breakdown per day, so the footer adds up
-  // those columns instead of the job-line subtotal/discount/tax fields, which it never
-  // fills -- reading the estimate-shaped fields there would show a row of zeroes.
-  const subtotal = lines.reduce((s, l) => s + num(isDailyCollections ? l.vat_ex : l.subtotal), 0);
-  const discountTotal = isDailyCollections ? 0 : lines.reduce((s, l) => s + num(l.disc_amount), 0);
-  const netOfTax = subtotal - discountTotal;
-  const taxTotal = isDailyCollections
-    ? lines.reduce((s, l) => s + num(l.vat_12), 0)
-    : lines.reduce((s, l) => s + (num(l.subtotal) - num(l.disc_amount)) * (num(l.tax_rate) / 100), 0);
-  const totalAmount = isDailyCollections
-    ? lines.reduce((s, l) => s + num(l.total_daily_sales), 0)
-    : netOfTax + taxTotal;
+  const { netOfTax, discountTotal, taxTotal, totalAmount } = salesOrderTotals(lines, isDailyCollections);
 
   return (
     <div>
@@ -180,6 +90,7 @@ export default function SalesOrderView() {
         <div />
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn btn-sm" onClick={() => navigate('/sales-orders')}>Back</button>
+          <button className="btn btn-sm btn-primary" onClick={() => window.open(`/sales-orders/${id}/print`, '_blank')}>Print</button>
           {canEdit && <button className="btn btn-sm" disabled title="Editing a Sales Order isn't implemented in this build -- amend the originating Estimate instead">Edit</button>}
           {canDeposit && (
             <button className="btn btn-sm btn-primary" onClick={() => navigate('/deposits/new', { state: { preselectSalesOrderId: so.id } })}>Deposit</button>
