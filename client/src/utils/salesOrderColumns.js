@@ -63,6 +63,17 @@ export const DAILY_COLLECTION_COLUMNS = [
   { key: 'total_cash_to_deposit', label: 'Total Cash to be Deposited', money: true },
   { key: 'total_gcash', label: 'Total E-wallet', money: true },
   { key: 'uncollected_sales', label: 'Uncollected Sales', money: true },
+  // Cash + e-wallet less total daily sales. Blank on a day that balances, which is most of
+  // them -- a figure in this column IS the mark that this day does not, and its sign says
+  // which way: negative means the till collected less than it rang up, the shape of a sale
+  // taken on account.
+  {
+    key: 'tender_variance',
+    label: 'Variance',
+    money: true,
+    blankWhenZero: true,
+    render: (r) => moneyOrBlank(r.tender_variance),
+  },
   { key: 'vat_ex', label: 'VAT EX', money: true },
   { key: 'vat_12', label: 'VAT 12%', money: true },
   { key: 'vat_inc', label: 'VAT (Inc.)', money: true },
@@ -94,6 +105,27 @@ export const LINE_COLUMNS = [
   { key: 'delivery_time', label: 'Delivery Time' },
   { key: 'gp_rate', label: 'GP Rate', render: (r) => (r.gp_rate != null ? `${r.gp_rate}%` : '') },
 ];
+
+// A Variance cell that actually carries a figure is set apart, so the mark is visible in the
+// grid without hunting along the row for which column it was.
+export function cellClass(column, row) {
+  const classes = [];
+  if (column.money) classes.push('num');
+  if (column.key === 'tender_variance' && Math.abs(num(row.tender_variance)) > 0.01) classes.push('so-variance');
+  return classes.join(' ') || undefined;
+}
+
+// Does this order carry a day whose tenders did not add up to its sales? Used to mark the
+// order itself, so an unbalanced day is visible without reading across to the Variance
+// column. Legacy rows hold NULL and count as balanced -- the old import refused anything
+// that was not, so that is a fact about them rather than an assumption.
+export function hasTenderVariance(lines) {
+  return (lines || []).some((l) => Math.abs(num(l.tender_variance)) > 0.01);
+}
+
+export function tenderVarianceTotal(lines) {
+  return Number((lines || []).reduce((s, l) => s + num(l.tender_variance), 0).toFixed(2));
+}
 
 // The four figures the footer/print totals show. The daily collections grid carries its own
 // VAT breakdown per day, so it adds up those columns instead of the job-line

@@ -71,6 +71,7 @@ const STEPS = [
   ['alter-sales-orders-deposit.js', 'undeposited/deposited counter sales'],
   ['alter-sales-orders-department.js', 'department assignment on counter sales'],
   ['alter-sales-orders-shift-attendants.js', 'Z-Reading opened/closed cashiers and times'],
+  ['alter-sales-orders-tender-variance.js', 'unbalanced Z-Reading days marked with their variance'],
   ['create-accounting-periods.js', 'accounting periods'],
   ['register-ar-aging-page.js', 'A/R aging report page'],
 

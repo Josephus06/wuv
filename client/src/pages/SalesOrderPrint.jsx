@@ -5,6 +5,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import { COMPANY } from '../config/company';
 import {
   STATUS_LABELS, DAILY_COLLECTION_COLUMNS, LINE_COLUMNS, money, moneyOrBlank, salesOrderTotals,
+  cellClass, hasTenderVariance, tenderVarianceTotal,
 } from '../utils/salesOrderColumns';
 
 // Sales Order hand-out. Shares the estimate/voucher print sheet, but carries the company
@@ -56,6 +57,9 @@ export default function SalesOrderPrint() {
   const columns = isDailyCollections ? DAILY_COLLECTION_COLUMNS : LINE_COLUMNS;
   const { netOfTax, discountTotal, taxTotal, totalAmount } = salesOrderTotals(lines, isDailyCollections);
   const gl = so.gl_impact || [];
+  // Marked on the hand-out too: whoever is handed this sheet should not have to add the
+  // tender columns up themselves to find out the day did not balance.
+  const unbalanced = isDailyCollections && hasTenderVariance(lines);
 
   return (
     <div className="estimate-print so-print">
@@ -94,7 +98,10 @@ export default function SalesOrderPrint() {
             Sales Order
             <span className="so-print-no">{so.sales_order_no}</span>
           </div>
-          <span className="so-print-status">{STATUS_LABELS[so.status] || so.status}</span>
+          <span className="so-print-status">
+            {unbalanced && <span className="so-print-unbalanced">Unbalanced {money(tenderVarianceTotal(lines))}</span>}
+            {STATUS_LABELS[so.status] || so.status}
+          </span>
         </div>
 
         <div className="so-print-info">
@@ -163,7 +170,7 @@ export default function SalesOrderPrint() {
                   {!isDailyCollections && <td className="num">{idx + 1}</td>}
                   {!isDailyCollections && <td>{l.job_order_no || '—'}</td>}
                   {columns.map((c) => (
-                    <td key={c.key} className={c.money ? 'num' : undefined}>
+                    <td key={c.key} className={cellClass(c, l)}>
                       {c.render ? c.render(l) : (c.money ? money(l[c.key]) : l[c.key])}
                     </td>
                   ))}

@@ -88,9 +88,9 @@ export default function SalesOrderImport() {
   const sum = (key) => usable.reduce((s, r) => s + num(r[key]), 0);
 
   // Mirrors the server's own refusal conditions, so the operator sees the problem in the row
-  // rather than in a failed save.
+  // rather than in a failed save. The tender difference is deliberately not among them --
+  // see tenderVariance below; it is marked, not refused.
   function rowProblem(s) {
-    if (!near(num(s.cash) + num(s.gcash), num(s.total_daily_sales))) return 'Cash + E-wallet does not equal Total Daily Sales';
     if (!near(num(s.vat_ex) + num(s.vat_12), num(s.vat_inc))) return 'VAT EX + VAT 12% does not equal VAT (Inc.)';
     if (!near(num(s.collected_cash) + num(s.collected_gcash), num(s.collected_bank_deposit))) {
       return `Collected Cash + Collected E-wallet must add up to ${money(s.collected_bank_deposit)}`;
@@ -99,7 +99,16 @@ export default function SalesOrderImport() {
   }
   function near(a, b) { return Math.abs(Number(a.toFixed(2)) - Number(b.toFixed(2))) <= 0.01; }
 
+  // What the day tendered less what it rang up. Zero on a day that balances; negative when it
+  // collected less than it sold, which is what a sale on account looks like. Saved with the
+  // day rather than blocking it, so the record carries its own discrepancy.
+  function tenderVariance(s) {
+    return Number((num(s.cash) + num(s.gcash) - num(s.total_daily_sales)).toFixed(2));
+  }
+
   const problems = usable.map(rowProblem).filter(Boolean);
+  const unbalanced = usable.filter((s) => Math.abs(tenderVariance(s)) > 0.01);
+  const varianceTotal = Number(usable.reduce((t, r) => t + tenderVariance(r), 0).toFixed(2));
   const canCreate = usable.length > 0 && problems.length === 0 && !!customer && !!department;
 
   async function handleCreate() {
@@ -228,6 +237,29 @@ export default function SalesOrderImport() {
             </div>
           ))}
 
+          {/* Saved rather than refused: a day with sales on account collects less than it
+              sold, and a POS can be a few pesos out against itself. Either way the day is
+              recorded and carries the difference, so it can be found and settled later
+              instead of never being recorded at all. */}
+          {unbalanced.length > 0 && (
+            <div className="warning-banner" style={{ marginTop: 16 }}>
+              <strong>{unbalanced.length === 1 ? 'One day does' : `${unbalanced.length} days do`} not balance.</strong>
+              <ul style={{ margin: '8px 0 0 18px' }}>
+                {unbalanced.map((s) => (
+                  <li key={`ub-${s.import_key}`}>
+                    {s.sale_date} — cash {money(s.cash)} + e-wallet {money(s.gcash)} is{' '}
+                    {money(Math.abs(tenderVariance(s)))} {tenderVariance(s) < 0 ? 'short of' : 'over'}{' '}
+                    total daily sales {money(s.total_daily_sales)}.
+                  </li>
+                ))}
+              </ul>
+              <div style={{ marginTop: 6 }}>
+                These will still be created. Each one is stored with its difference and shows as
+                <strong> Unbalanced</strong> on the order, so it can be settled against the till later.
+              </div>
+            </div>
+          )}
+
           {usable.filter((s) => (s.warnings || []).length).map((s) => (
             <div className="warning-banner" style={{ marginTop: 16 }} key={`warn-${s.import_key}`}>
               <strong>{s.source_file}</strong> — this report does not agree with itself:
@@ -262,7 +294,7 @@ export default function SalesOrderImport() {
                     <th>Date</th><th>Branch / Shift</th><th>Cash</th><th>Collected Cash</th><th>E-wallet</th>
                     <th>Collected E-wallet</th><th>Collected Bank Deposit / Collected Sales</th>
                     <th>Total Daily Sales</th><th>Total Cash to be Deposited</th><th>Total E-wallet</th>
-                    <th>Uncollected Sales</th><th>VAT EX</th><th>VAT 12%</th><th>VAT (Inc.)</th>
+                    <th>Uncollected Sales</th><th>Variance</th><th>VAT EX</th><th>VAT 12%</th><th>VAT (Inc.)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -312,6 +344,10 @@ export default function SalesOrderImport() {
                         <td>{money(s.total_cash_to_deposit)}</td>
                         <td>{money(s.total_gcash)}</td>
                         <td>{money(s.uncollected_sales)}</td>
+                        {/* Blank when the day balances; a figure here is the mark it does not. */}
+                        <td className={Math.abs(tenderVariance(s)) > 0.01 ? 'so-variance' : undefined}>
+                          {tenderVariance(s) ? money(tenderVariance(s)) : ''}
+                        </td>
                         <td>{money(s.vat_ex)}</td>
                         <td>{money(s.vat_12)}</td>
                         <td>{money(s.vat_inc)}</td>
@@ -322,8 +358,13 @@ export default function SalesOrderImport() {
                     <tr>
                       <td colSpan={2}><strong>Total</strong></td>
                       {['cash', 'collected_cash', 'gcash', 'collected_gcash', 'collected_bank_deposit',
-                        'total_daily_sales', 'total_cash_to_deposit', 'total_gcash', 'uncollected_sales',
-                        'vat_ex', 'vat_12', 'vat_inc'].map((k) => (
+                        'total_daily_sales', 'total_cash_to_deposit', 'total_gcash', 'uncollected_sales'].map((k) => (
+                          <td key={k}><strong>{money(sum(k))}</strong></td>
+                        ))}
+                      <td className={Math.abs(varianceTotal) > 0.01 ? 'so-variance' : undefined}>
+                        <strong>{varianceTotal ? money(varianceTotal) : ''}</strong>
+                      </td>
+                      {['vat_ex', 'vat_12', 'vat_inc'].map((k) => (
                           <td key={k}><strong>{money(sum(k))}</strong></td>
                         ))}
                     </tr>

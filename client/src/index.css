@@ -1168,6 +1168,22 @@ button.progress-bar:disabled { cursor: not-allowed; opacity: 0.6; }
   font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em;
 }
 .so-print-no { font-size: 14px; font-weight: 600; letter-spacing: 0.04em; color: #b9d6d8; }
+/* An unbalanced day is a fact about the money, so it is marked where the status is read --
+   on screen beside the status, and on the printed sheet inside the title band. Amber rather
+   than red: the order is valid and saved, it just has a difference someone has to settle. */
+.so-unbalanced-badge {
+  display: inline-block; margin-right: 10px; padding: 2px 10px; border-radius: 999px;
+  background: #fef3c7; color: #92400e; border: 1px solid #f59e0b;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+}
+.so-print-unbalanced {
+  display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px;
+  background: #fde68a; color: #7c2d12; font-weight: 700;
+}
+/* A figure in the Variance column is itself the mark, so it is set apart from the columns
+   either side of it rather than reading as one more amount. */
+.so-print-table td.so-variance,
+table td.so-variance { color: #92400e; font-weight: 700; background: #fffbeb; }
 .so-print-status {
   flex-shrink: 0; font-size: 10px; text-transform: uppercase; letter-spacing: 0.09em;
   border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 3px 12px;

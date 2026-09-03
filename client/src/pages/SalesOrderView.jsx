@@ -7,6 +7,7 @@ import DeliveryTicketModal from '../components/DeliveryTicketModal';
 import LoadingSpinner from '../components/LoadingSpinner';
 import {
   STATUS_LABELS, DAILY_COLLECTION_COLUMNS, LINE_COLUMNS, money, moneyOrBlank, salesOrderTotals,
+  cellClass, hasTenderVariance, tenderVarianceTotal,
 } from '../utils/salesOrderColumns';
 
 // Read-only Sales Order detail -- mirrors EstimateView.jsx's layout (banner + 4-column
@@ -83,6 +84,9 @@ export default function SalesOrderView() {
   const hasInvoiceableLine = lines.some((l) => l.job_order_id && Number(l.quantity_delivered || 0) > Number(l.quantity_invoiced || 0));
   const canEdit = can('/sales-orders', 'can_edit');
   const { netOfTax, discountTotal, taxTotal, totalAmount } = salesOrderTotals(lines, isDailyCollections);
+  // A day whose tenders did not add up to its sales is saved rather than refused, so the
+  // order has to say so where the status is read.
+  const unbalanced = isDailyCollections && hasTenderVariance(lines);
 
   return (
     <div>
@@ -121,6 +125,11 @@ export default function SalesOrderView() {
           <span className="estimate-no">{so.sales_order_no}</span>
         </div>
         <div className="estimate-status">
+          {unbalanced && (
+            <span className="so-unbalanced-badge" title={`Cash + e-wallet is off total daily sales by ${money(tenderVarianceTotal(lines))}`}>
+              Unbalanced {money(tenderVarianceTotal(lines))}
+            </span>
+          )}
           {STATUS_LABELS[so.status] || so.status}
           <button type="button" className="estimate-so-link" onClick={() => navigate(`/estimates/${so.estimate_id}`)}>
             {so.estimate_no}
@@ -193,7 +202,7 @@ export default function SalesOrderView() {
                 {lines.map((l) => (
                   <tr key={l.id}>
                     {DAILY_COLLECTION_COLUMNS.map((c) => (
-                      <td key={c.key}>{c.render ? c.render(l) : (c.money ? money(l[c.key]) : l[c.key])}</td>
+                      <td key={c.key} className={cellClass(c, l)}>{c.render ? c.render(l) : (c.money ? money(l[c.key]) : l[c.key])}</td>
                     ))}
                   </tr>
                 ))}

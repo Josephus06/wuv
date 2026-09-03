@@ -306,12 +306,18 @@ router.post('/import', requireAuth, requirePermission(ROUTE, 'can_add'), async (
         vat_inc: n(s.vat_inc),
       };
 
-      // The Z-Reading's own arithmetic, re-asserted. Each of these holds on a well-formed
-      // report, so a failure means the figures were edited or misread between preview and
-      // save -- either way not something to persist.
-      if (!near(r.cash + r.gcash, r.total_daily_sales)) {
-        return res.status(409).json({ error: `${label}: cash ${r.cash.toFixed(2)} + GCash ${r.gcash.toFixed(2)} does not equal total daily sales ${r.total_daily_sales.toFixed(2)}.` });
-      }
+      // What the day tendered against what it rang up. This is NOT refused, unlike the VAT
+      // identities below, because it has ordinary reasons to differ: a day with sales on
+      // account collects less than it sold, and a POS can simply be a few pesos out against
+      // itself. Refusing meant such a day could never be recorded at all. The difference is
+      // stored on the line instead, so the day is saved and carries its own discrepancy.
+      // computeSalesOrderGl already handles a shortfall by debiting the unpaid remainder to
+      // Accounts Receivable, so the ledger balances either way.
+      r.tender_variance = Number((r.cash + r.gcash - r.total_daily_sales).toFixed(2));
+
+      // The VAT identities, by contrast, are re-asserted and refused. They are what the
+      // order's net-of-tax, tax and total are built from, so a row that breaks them would
+      // post a journal entry that does not add up.
       if (!near(r.vat_ex + r.vat_12, r.vat_inc)) {
         return res.status(409).json({ error: `${label}: VAT EX ${r.vat_ex.toFixed(2)} + VAT 12% ${r.vat_12.toFixed(2)} does not equal VAT inclusive ${r.vat_inc.toFixed(2)}.` });
       }
@@ -427,14 +433,14 @@ router.post('/import', requireAuth, requirePermission(ROUTE, 'can_add'), async (
             pos_opened_by, pos_opened_at, pos_closed_at, pos_opened_employee_id, pos_closed_employee_id,
             pos_beginning_or, pos_ending_or, sale_date, cash, collected_cash, gcash, collected_gcash,
             collected_bank_deposit, total_daily_sales, total_cash_to_deposit, total_gcash,
-            uncollected_sales, vat_ex, vat_12, vat_inc)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            uncollected_sales, tender_variance, vat_ex, vat_12, vat_inc)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           salesOrderId, lineNo, r.import_key, r.branch_code, r.shift, r.cashier,
           r.opened_by, r.opened_at, r.closed_at, r.opened_employee_id, r.closed_employee_id,
           r.beginning_or, r.ending_or, r.sale_date, r.cash, r.collected_cash, r.gcash, r.collected_gcash,
           r.collected_bank_deposit, r.total_daily_sales, r.total_cash_to_deposit, r.total_gcash,
-          r.uncollected_sales, r.vat_ex, r.vat_12, r.vat_inc,
+          r.uncollected_sales, r.tender_variance, r.vat_ex, r.vat_12, r.vat_inc,
         ]
       );
       const lineId = lineRes.insertId;
