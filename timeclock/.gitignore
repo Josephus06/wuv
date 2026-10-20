@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+# Android build output and machine-specific files; the android/ project itself is committed.
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/.idea/
+android/app/src/main/assets/public/
+
+release-apk/

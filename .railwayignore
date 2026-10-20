@@ -13,3 +13,6 @@ node_modules/
 dist/
 .git/
 *.log
+
+# The employee time-clock app is built into an APK locally; the web service never needs it.
+timeclock/
