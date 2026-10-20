@@ -39,13 +39,28 @@ const NAV_STRUCTURE = [
   },
   {
     label: 'HR',
-    children: [
-      // Everyone's own time clock: shown to any account linked to an employee, with no
-      // pages row -- the API only ever stamps the caller's own employee.
-      { route: '/my-attendance', label: 'My Attendance', forEmployees: true },
-      { route: '/attendance', label: 'Attendance' },
-      { route: '/shift-assignments', label: 'Shift Assignments' },
-      { route: '/shifts', label: 'Shifts' },
+    sections: [
+      {
+        title: 'Time & Attendance',
+        items: [
+          // Everyone's own time clock: shown to any account linked to an employee, with no
+          // pages row -- the API only ever stamps the caller's own employee.
+          { route: '/my-attendance', label: 'My Attendance', forEmployees: true },
+          { route: '/attendance', label: 'Attendance' },
+          { route: '/shift-assignments', label: 'Shift Assignments' },
+          { route: '/shifts', label: 'Shifts' },
+        ],
+      },
+      {
+        title: 'Payroll',
+        items: [
+          { route: '/payroll', label: 'Payroll' },
+          { route: '/payroll-pay-items', label: 'Allowances & Deductions' },
+          { route: '/payroll-loans', label: 'Loans' },
+          { route: '/payroll-holidays', label: 'Holidays' },
+          { route: '/payroll-settings', label: 'Payroll Settings' },
+        ],
+      },
     ],
   },
   {

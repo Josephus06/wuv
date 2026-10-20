@@ -71,6 +71,8 @@ const rfqcJobOrderRoutes = require('./routes/rfqcJobOrders');
 const shiftRoutes = require('./routes/shifts');
 const shiftAssignmentRoutes = require('./routes/shiftAssignments');
 const attendanceRoutes = require('./routes/attendance');
+const payrollRoutes = require('./routes/payroll');
+const payrollSetupRoutes = require('./routes/payrollSetup');
 const { ensureAssignedAtColumn } = require('./db/ensureSchema');
 const { ensureDatabaseReady } = require('./db/autoBootstrap');
 const { sendTicketReminders } = require('./scripts/ticket_reminder');
@@ -154,6 +156,8 @@ app.use('/api/rfqc-job-orders', rfqcJobOrderRoutes);
 app.use('/api/shifts', shiftRoutes);
 app.use('/api/shift-assignments', shiftAssignmentRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/payroll', payrollRoutes);
+app.use('/api/payroll-setup', payrollSetupRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

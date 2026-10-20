@@ -1918,3 +1918,34 @@ table td.so-variance { color: #92400e; font-weight: 700; background: #fffbeb; }
   .timeclock-chip { padding: 8px; }
   .timeclock-chip-label { display: none; }
 }
+
+/* ---- Payroll ---- */
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.num, th.num { text-align: right; }
+.negative { color: var(--danger); }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover td { background: var(--accent-bg); }
+.payroll-table tfoot th { background: var(--bg); border-top: 2px solid var(--border); color: var(--text-h); }
+.link-button { background: none; border: none; padding: 0; color: var(--danger); font: inherit; cursor: pointer; text-decoration: underline; }
+
+.payslip-group { margin-top: 14px; }
+.payslip-group h4 { margin: 0 0 6px; color: var(--text-h); font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
+.payslip-table td, .payslip-table th { padding: 6px 8px; }
+.payslip-table tfoot th { color: var(--text-h); border-top: 1px solid var(--border); }
+.payslip-table input { min-width: 90px; }
+.payslip-net {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 16px; padding: 12px 16px; border-radius: 10px;
+  background: var(--accent-bg); color: var(--accent);
+}
+.payslip-net strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.payslip-adjustment { display: flex; align-items: center; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.payslip-adjustment span:first-child { flex: 1; }
+
+.loan-progress { height: 5px; border-radius: 999px; background: var(--border); overflow: hidden; margin: 4px 0 2px; }
+.loan-progress span { display: block; height: 100%; background: var(--success); }
+
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.settings-grid h3 { margin-top: 0; }
+.settings-wide { grid-column: 1 / -1; }
+.settings-pairs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0 12px; }

@@ -130,6 +130,12 @@ import MyAttendance from './pages/MyAttendance';
 import Attendance from './pages/Attendance';
 import ShiftAssignments from './pages/ShiftAssignments';
 import Shifts from './pages/Shifts';
+import Payroll from './pages/Payroll';
+import PayrollRunView from './pages/PayrollRunView';
+import PayrollPayItems from './pages/PayrollPayItems';
+import PayrollLoans from './pages/PayrollLoans';
+import PayrollHolidays from './pages/PayrollHolidays';
+import PayrollSettings from './pages/PayrollSettings';
 import CommissionReport from './pages/reports/CommissionReport';
 import CommissionJoDetail from './pages/reports/CommissionJoDetail';
 import TicketSummary from './pages/reports/TicketSummary';
@@ -328,6 +334,12 @@ function App() {
         <Route path="/attendance" element={<Attendance />} />
         <Route path="/shift-assignments" element={<ShiftAssignments />} />
         <Route path="/shifts" element={<Shifts />} />
+        <Route path="/payroll" element={<Payroll />} />
+        <Route path="/payroll/:id" element={<PayrollRunView />} />
+        <Route path="/payroll-pay-items" element={<PayrollPayItems />} />
+        <Route path="/payroll-loans" element={<PayrollLoans />} />
+        <Route path="/payroll-holidays" element={<PayrollHolidays />} />
+        <Route path="/payroll-settings" element={<PayrollSettings />} />
         <Route path="/employee-quotas" element={<EmployeeQuotas />} />
         <Route path="/employee-quotas/:id" element={<EmployeeQuotaView />} />
         <Route path="/commission-report" element={<CommissionReport />} />
