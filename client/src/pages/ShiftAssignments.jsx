@@ -85,6 +85,18 @@ export default function ShiftAssignments() {
     }));
   }
 
+  // Adds or removes everyone currently listed -- so with a search typed it acts on the matches
+  // only, which is how a whole branch gets picked in two steps.
+  function selectShown(select) {
+    const shown = pickerEmployees.map((emp) => emp.id);
+    setForm((f) => ({
+      ...f,
+      employee_ids: select
+        ? [...new Set([...f.employee_ids, ...shown])]
+        : pickerSearch.trim() ? f.employee_ids.filter((id) => !shown.includes(id)) : [],
+    }));
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
@@ -187,17 +199,31 @@ export default function ShiftAssignments() {
 
             {editing === 'new' && (
               <div className="field">
-                <label>Employees ({form.employee_ids.length} selected)</label>
-                <input value={pickerSearch} onChange={(e) => setPickerSearch(e.target.value)} placeholder="Search name, code, company, branch..." style={{ marginBottom: 6 }} />
-                <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 6 }}>
-                  {pickerEmployees.map((emp) => (
-                    <label key={emp.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', cursor: 'pointer', fontWeight: 400 }}>
-                      <input type="checkbox" checked={form.employee_ids.includes(emp.id)} onChange={() => toggleEmployee(emp.id)} />
-                      <span>{emp.name}</span>
-                      <span className="muted" style={{ fontSize: 12 }}>{[emp.employee_code, emp.company_name, emp.branch_name].filter(Boolean).join(' · ')}</span>
-                    </label>
-                  ))}
-                  {!pickerEmployees.length && <div className="muted" style={{ padding: 6 }}>No active employees match.</div>}
+                <div className="emp-picker-head">
+                  <label>Employees <span className="muted">({form.employee_ids.length} selected)</span></label>
+                  <div className="emp-picker-actions">
+                    <button type="button" className="btn btn-sm" onClick={() => selectShown(true)} disabled={!pickerEmployees.length}>
+                      {pickerSearch.trim() ? 'Select shown' : 'Select all'}
+                    </button>
+                    <button type="button" className="btn btn-sm" onClick={() => selectShown(false)} disabled={!form.employee_ids.length}>Clear</button>
+                  </div>
+                </div>
+                <input value={pickerSearch} onChange={(e) => setPickerSearch(e.target.value)} placeholder="Search name, code, company, branch..." />
+                <div className="emp-picker">
+                  {pickerEmployees.map((emp) => {
+                    const on = form.employee_ids.includes(emp.id);
+                    const meta = [emp.employee_code, emp.company_name, emp.branch_name].filter(Boolean).join(' · ');
+                    return (
+                      <label key={emp.id} className={`emp-picker-row ${on ? 'is-on' : ''}`}>
+                        <input type="checkbox" checked={on} onChange={() => toggleEmployee(emp.id)} />
+                        <span className="emp-picker-text">
+                          <span className="emp-picker-name">{emp.name}</span>
+                          {meta && <span className="emp-picker-meta">{meta}</span>}
+                        </span>
+                      </label>
+                    );
+                  })}
+                  {!pickerEmployees.length && <div className="emp-picker-empty muted">No active employees match.</div>}
                 </div>
               </div>
             )}

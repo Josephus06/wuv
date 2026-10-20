@@ -1842,6 +1842,35 @@ table td.so-variance { color: #92400e; font-weight: 700; background: #fffbeb; }
 .time-clock-actions .btn { min-width: 160px; padding: 12px 20px; font-size: 15px; }
 .time-clock-elapsed { font-size: 13px; color: var(--text); }
 
+.emp-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.emp-picker-head label { margin: 0; }
+.emp-picker-actions { display: flex; gap: 6px; }
+.emp-picker {
+  margin-top: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.emp-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin: 0;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  font-weight: 400;
+}
+.emp-picker-row:first-child { border-top: none; }
+.emp-picker-row:hover { background: var(--accent-bg); }
+.emp-picker-row.is-on { background: var(--accent-bg); }
+.emp-picker-row input[type="checkbox"] { width: auto; margin: 0; flex-shrink: 0; accent-color: var(--accent); }
+.emp-picker-text { display: flex; flex-direction: column; min-width: 0; text-align: left; }
+.emp-picker-name { color: var(--text-h); font-weight: 500; font-size: 14px; }
+.emp-picker-meta { font-size: 12px; color: var(--text); opacity: 0.8; }
+.emp-picker-empty { padding: 10px 12px; }
+
 .day-picker { display: flex; flex-wrap: wrap; gap: 6px; }
 .day-picker button { min-width: 48px; }
 .day-picker button.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
