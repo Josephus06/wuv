@@ -89,6 +89,9 @@ const STEPS = [
   ['create-newsfeed.js', 'dashboard newsfeed (posts, photos, comments, reactions)'],
   ['create-account-type-permissions.js', 'account-type permission templates'],
 
+  // HR
+  ['create-attendance.js', 'shifts, shift assignments and attendance'],
+
   // Last: registers any page the migrations above did not, and gives the seeded admin an
   // account_type plus full access to everything.
   ['register-all-pages.js', 'register all pages and finish admin setup'],

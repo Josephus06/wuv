@@ -43,4 +43,29 @@ function requirePermission(route, action = 'can_view') {
   };
 }
 
-module.exports = { requireAuth, requirePermission };
+// Passes when the user holds `action` on ANY of the given routes -- for lookups that several
+// pages share (e.g. the shift list feeds Shifts, Shift Assignments and Attendance alike).
+function requireAnyPermission(routes, action = 'can_view') {
+  if (!PERMISSION_ACTIONS.has(action)) {
+    throw new Error(`Unknown permission action: ${action}`);
+  }
+
+  return async (req, res, next) => {
+    try {
+      const [[row]] = await pool.query(
+        `SELECT MAX(upp.${action}) AS allowed
+         FROM user_page_permissions upp JOIN pages p ON p.id = upp.page_id
+         WHERE upp.user_id = ? AND p.route IN (?)`,
+        [req.user.id, routes]
+      );
+      if (!row || !row.allowed) {
+        return res.status(403).json({ error: 'You do not have permission to perform this action' });
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+module.exports = { requireAuth, requirePermission, requireAnyPermission };

@@ -44,6 +44,10 @@ const PAGES = [
   { route: '/service-items',                  name: 'Service Items',               module: 'Master Lists' },
   { route: '/lookups',                        name: 'Lookups',                     module: 'Master Lists' },
   { route: '/transaction-settings',           name: 'Transaction Settings',        module: 'Master Lists' },
+  // HR
+  { route: '/shifts',                         name: 'Shifts',                      module: 'HR' },
+  { route: '/shift-assignments',              name: 'Shift Assignments',           module: 'HR' },
+  { route: '/attendance',                     name: 'Attendance',                  module: 'HR' },
   // Inventory
   { route: '/inventory-adjustments',          name: 'Inventory Adjustments',       module: 'Inventory' },
   { route: '/transfer-orders',                name: 'Transfer Orders',             module: 'Inventory' },

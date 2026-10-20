@@ -1824,3 +1824,49 @@ table td.so-variance { color: #92400e; font-weight: 700; background: #fffbeb; }
 @media (prefers-reduced-motion: reduce) {
   .theme-toggle, .theme-toggle-label, .theme-toggle-knob { transition: none; }
 }
+
+/* ---- Attendance / time clock ---- */
+.badge-warning { background: var(--warning-bg); color: var(--warning); }
+
+.time-clock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.time-clock-now { font-size: 40px; font-weight: 700; color: var(--text-h); font-variant-numeric: tabular-nums; line-height: 1.1; }
+.time-clock-date { color: var(--text); margin-top: 4px; }
+.time-clock-shift { margin-top: 10px; font-size: 13px; }
+.time-clock-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.time-clock-actions .btn { min-width: 160px; padding: 12px 20px; font-size: 15px; }
+.time-clock-elapsed { font-size: 13px; color: var(--text); }
+
+.day-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.day-picker button { min-width: 48px; }
+.day-picker button.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.timeclock-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-h);
+  text-decoration: none;
+}
+.timeclock-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text); opacity: 0.5; }
+.timeclock-chip.is-on .dot { background: var(--success); opacity: 1; }
+.timeclock-chip:hover { border-color: var(--accent); }
+
+@media (max-width: 640px) {
+  .time-clock-actions { align-items: stretch; width: 100%; }
+  .time-clock-now { font-size: 32px; }
+}
+@media (max-width: 480px) {
+  .timeclock-chip { padding: 8px; }
+  .timeclock-chip-label { display: none; }
+}

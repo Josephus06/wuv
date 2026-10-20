@@ -68,6 +68,9 @@ const nonStandardSalesOrderRoutes = require('./routes/nonStandardSalesOrders');
 const warrantyCertificateRoutes = require('./routes/warrantyCertificates');
 const rwipJobOrderRoutes = require('./routes/rwipJobOrders');
 const rfqcJobOrderRoutes = require('./routes/rfqcJobOrders');
+const shiftRoutes = require('./routes/shifts');
+const shiftAssignmentRoutes = require('./routes/shiftAssignments');
+const attendanceRoutes = require('./routes/attendance');
 const { ensureAssignedAtColumn } = require('./db/ensureSchema');
 const { ensureDatabaseReady } = require('./db/autoBootstrap');
 const { sendTicketReminders } = require('./scripts/ticket_reminder');
@@ -148,6 +151,9 @@ app.use('/api/non-standard-sales-orders', nonStandardSalesOrderRoutes);
 app.use('/api/warranty-certificates', warrantyCertificateRoutes);
 app.use('/api/rwip-job-orders', rwipJobOrderRoutes);
 app.use('/api/rfqc-job-orders', rfqcJobOrderRoutes);
+app.use('/api/shifts', shiftRoutes);
+app.use('/api/shift-assignments', shiftAssignmentRoutes);
+app.use('/api/attendance', attendanceRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

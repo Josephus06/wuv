@@ -126,6 +126,10 @@ import CommissionSchemes from './pages/CommissionSchemes';
 import CommissionSchemeView from './pages/CommissionSchemeView';
 import EmployeeQuotas from './pages/EmployeeQuotas';
 import EmployeeQuotaView from './pages/EmployeeQuotaView';
+import MyAttendance from './pages/MyAttendance';
+import Attendance from './pages/Attendance';
+import ShiftAssignments from './pages/ShiftAssignments';
+import Shifts from './pages/Shifts';
 import CommissionReport from './pages/reports/CommissionReport';
 import CommissionJoDetail from './pages/reports/CommissionJoDetail';
 import TicketSummary from './pages/reports/TicketSummary';
@@ -320,6 +324,10 @@ function App() {
         <Route path="/reports/ar-aging" element={<ArAging />} />
         <Route path="/commission-schemes" element={<CommissionSchemes />} />
         <Route path="/commission-schemes/:id" element={<CommissionSchemeView />} />
+        <Route path="/my-attendance" element={<MyAttendance />} />
+        <Route path="/attendance" element={<Attendance />} />
+        <Route path="/shift-assignments" element={<ShiftAssignments />} />
+        <Route path="/shifts" element={<Shifts />} />
         <Route path="/employee-quotas" element={<EmployeeQuotas />} />
         <Route path="/employee-quotas/:id" element={<EmployeeQuotaView />} />
         <Route path="/commission-report" element={<CommissionReport />} />
