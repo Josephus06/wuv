@@ -220,7 +220,8 @@ function statusOf(log, schedule, now) {
 // One row per employee per day in [from, to] that was either scheduled or has a record --
 // so a scheduled day with no time-in shows up as Absent, which a plain list of punches
 // could never show. Rest days with nothing recorded are left out.
-//   ?from=&to= (default today, max MAX_REPORT_DAYS), ?employee_id, ?department_id, ?status
+//   ?from=&to= (default today, max MAX_REPORT_DAYS), ?employee_id, ?company_id, ?branch_id,
+//   ?department_id, ?status
 router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
   try {
     const now = new Date();
@@ -235,6 +236,8 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
     const empWhere = [];
     const empParams = [];
     if (req.query.employee_id) { empWhere.push('e.id = ?'); empParams.push(req.query.employee_id); }
+    if (req.query.company_id) { empWhere.push('e.company_id = ?'); empParams.push(req.query.company_id); }
+    if (req.query.branch_id) { empWhere.push('e.branch_id = ?'); empParams.push(req.query.branch_id); }
     if (req.query.department_id) { empWhere.push('e.department_id = ?'); empParams.push(req.query.department_id); }
     const empFilter = empWhere.length ? `AND ${empWhere.join(' AND ')}` : '';
 
@@ -247,8 +250,12 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
 
     // Inactive employees are only listed for days they actually have a record.
     const [employees] = await pool.query(
-      `SELECT e.id, e.employee_code, CONCAT(e.first_name, ' ', e.last_name) AS name, d.name AS department_name, e.is_active
-       FROM employees e LEFT JOIN departments d ON d.id = e.department_id
+      `SELECT e.id, e.employee_code, CONCAT(e.first_name, ' ', e.last_name) AS name, d.name AS department_name, e.is_active,
+              c.name AS company_name, l.location_name AS branch_name
+       FROM employees e
+       LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN companies c ON c.id = e.company_id
+       LEFT JOIN locations l ON l.id = e.branch_id
        WHERE (e.is_active = TRUE OR e.id IN (?)) ${empFilter}
        ORDER BY e.first_name, e.last_name`,
       [logs.length ? logs.map((l) => l.employee_id) : [0], ...empParams]
@@ -276,6 +283,8 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
           employee_code: emp.employee_code,
           employee_name: emp.name,
           department_name: emp.department_name,
+          company_name: emp.company_name,
+          branch_name: emp.branch_name,
           work_date: date,
           shift_name: log ? log.shift_name : assignment.shift_name,
           scheduled_start_local: log ? s.scheduled_start_local : toLocalDisplay(toDbUtc(schedule.start)),

@@ -27,7 +27,7 @@ function csvCell(v) {
 
 export default function Attendance() {
   const { can } = useAuth();
-  const [filters, setFilters] = useState(() => ({ from: todayIso(), to: todayIso(), employee_id: '', department_id: '' }));
+  const [filters, setFilters] = useState(() => ({ from: todayIso(), to: todayIso(), company_id: '', branch_id: '', employee_id: '', department_id: '' }));
   const [status, setStatus] = useState('');
   const [report, setReport] = useState(null);
   const [employees, setEmployees] = useState([]);
@@ -55,6 +55,22 @@ export default function Attendance() {
     load();
     api.get('/shift-assignments/employees').then(({ data }) => setEmployees(data)).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Companies and branches are read off the employee list rather than Lookups, so the filters
+  // need no Lookups permission and only offer values someone is actually assigned to.
+  const companies = useMemo(() => {
+    const map = new Map();
+    employees.forEach((e) => { if (e.company_id) map.set(e.company_id, e.company_name); });
+    return [...map.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [employees]);
+
+  const branches = useMemo(() => {
+    const map = new Map();
+    employees
+      .filter((e) => e.branch_id && (!filters.company_id || String(e.company_id) === String(filters.company_id)))
+      .forEach((e) => map.set(e.branch_id, e.branch_name));
+    return [...map.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [employees, filters.company_id]);
 
   const departments = useMemo(() => {
     const map = new Map();
@@ -109,10 +125,10 @@ export default function Attendance() {
   }
 
   function exportCsv() {
-    const header = ['Date', 'Employee Code', 'Employee', 'Department', 'Shift', 'Scheduled In', 'Scheduled Out',
+    const header = ['Date', 'Employee Code', 'Employee', 'Company', 'Branch', 'Department', 'Shift', 'Scheduled In', 'Scheduled Out',
       'Time In', 'Time Out', 'Late (min)', 'Undertime (min)', 'Overtime (min)', 'Worked (min)', 'Status', 'Source', 'Remarks'];
     const lines = rows.map((r) => [
-      r.work_date, r.employee_code, r.employee_name, r.department_name, r.shift_name, r.scheduled_start_local, r.scheduled_end_local,
+      r.work_date, r.employee_code, r.employee_name, r.company_name, r.branch_name, r.department_name, r.shift_name, r.scheduled_start_local, r.scheduled_end_local,
       r.time_in_local, r.time_out_local, r.late_minutes, r.undertime_minutes, r.overtime_minutes, r.worked_minutes,
       r.status, r.source, r.remarks,
     ].map(csvCell).join(','));
@@ -129,7 +145,14 @@ export default function Attendance() {
 
   const columns = [
     { key: 'work_date', label: 'Date', render: (r) => formatDate(r.work_date) },
-    { key: 'employee_name', label: 'Employee', render: (r) => <>{r.employee_name}{r.department_name && <div className="muted" style={{ fontSize: 11 }}>{r.department_name}</div>}</> },
+    {
+      key: 'employee_name',
+      label: 'Employee',
+      render: (r) => {
+        const where = [r.company_name, r.branch_name].filter(Boolean).join(' · ') || r.department_name;
+        return <>{r.employee_name}{where && <div className="muted" style={{ fontSize: 11 }}>{where}</div>}</>;
+      },
+    },
     { key: 'shift', label: 'Schedule', render: (r) => (r.shift_name ? <>{r.shift_name}<div className="muted" style={{ fontSize: 11 }}>{scheduleLabel(r)}</div></> : <span className="muted">Unscheduled</span>) },
     {
       key: 'time_in',
@@ -194,6 +217,20 @@ export default function Attendance() {
             <input type="date" value={filters.to} min={filters.from} onChange={(e) => setFilters({ ...filters, to: e.target.value })} />
           </div>
           <div className="field">
+            <label>Company</label>
+            <select value={filters.company_id} onChange={(e) => setFilters({ ...filters, company_id: e.target.value, branch_id: '', employee_id: '' })}>
+              <option value="">All</option>
+              {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>Branch</label>
+            <select value={filters.branch_id} onChange={(e) => setFilters({ ...filters, branch_id: e.target.value, employee_id: '' })}>
+              <option value="">All</option>
+              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+          <div className="field">
             <label>Department</label>
             <select value={filters.department_id} onChange={(e) => setFilters({ ...filters, department_id: e.target.value })}>
               <option value="">All</option>
@@ -205,6 +242,8 @@ export default function Attendance() {
             <select value={filters.employee_id} onChange={(e) => setFilters({ ...filters, employee_id: e.target.value })}>
               <option value="">All</option>
               {employees
+                .filter((emp) => !filters.company_id || String(emp.company_id) === String(filters.company_id))
+                .filter((emp) => !filters.branch_id || String(emp.branch_id) === String(filters.branch_id))
                 .filter((emp) => !filters.department_id || String(emp.department_id) === String(filters.department_id))
                 .map((emp) => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
             </select>

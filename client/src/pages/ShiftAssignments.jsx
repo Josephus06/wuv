@@ -124,7 +124,7 @@ export default function ShiftAssignments() {
   const pickerEmployees = useMemo(() => {
     const q = pickerSearch.trim().toLowerCase();
     if (!q) return employees;
-    return employees.filter((e) => [e.employee_code, e.name, e.department_name].filter(Boolean).join(' ').toLowerCase().includes(q));
+    return employees.filter((e) => [e.employee_code, e.name, e.company_name, e.branch_name, e.department_name].filter(Boolean).join(' ').toLowerCase().includes(q));
   }, [employees, pickerSearch]);
 
   const activeShifts = shifts.filter((s) => s.is_active || String(s.id) === form.shift_id);
@@ -188,13 +188,13 @@ export default function ShiftAssignments() {
             {editing === 'new' && (
               <div className="field">
                 <label>Employees ({form.employee_ids.length} selected)</label>
-                <input value={pickerSearch} onChange={(e) => setPickerSearch(e.target.value)} placeholder="Search name, code, department..." style={{ marginBottom: 6 }} />
+                <input value={pickerSearch} onChange={(e) => setPickerSearch(e.target.value)} placeholder="Search name, code, company, branch..." style={{ marginBottom: 6 }} />
                 <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 6 }}>
                   {pickerEmployees.map((emp) => (
                     <label key={emp.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', cursor: 'pointer', fontWeight: 400 }}>
                       <input type="checkbox" checked={form.employee_ids.includes(emp.id)} onChange={() => toggleEmployee(emp.id)} />
                       <span>{emp.name}</span>
-                      <span className="muted" style={{ fontSize: 12 }}>{[emp.employee_code, emp.department_name].filter(Boolean).join(' · ')}</span>
+                      <span className="muted" style={{ fontSize: 12 }}>{[emp.employee_code, emp.company_name, emp.branch_name].filter(Boolean).join(' · ')}</span>
                     </label>
                   ))}
                   {!pickerEmployees.length && <div className="muted" style={{ padding: 6 }}>No active employees match.</div>}

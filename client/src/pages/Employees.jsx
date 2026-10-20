@@ -6,7 +6,7 @@ import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 const EMPTY = {
-  employee_code: '', first_name: '', last_name: '', department_id: '',
+  employee_code: '', first_name: '', last_name: '', department_id: '', company_id: '', branch_id: '',
   position_title: '', email: '', phone: '', date_hired: '', is_active: true,
 };
 
@@ -14,6 +14,9 @@ export default function Employees() {
   const { can } = useAuth();
   const [rows, setRows] = useState([]);
   const [departments, setDepartments] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [locations, setLocations] = useState([]);
+  const [companyFilter, setCompanyFilter] = useState('');
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY);
   const [error, setError] = useState('');
@@ -23,12 +26,16 @@ export default function Employees() {
 
   async function load() {
     setLoading(true);
-    const [emp, dept] = await Promise.all([
+    const [emp, dept, comp, loc] = await Promise.all([
       api.get('/employees'),
       api.get('/lookups/departments'),
+      api.get('/lookups/companies'),
+      api.get('/lookups/locations'),
     ]);
     setRows(emp.data);
     setDepartments(dept.data);
+    setCompanies(comp.data.filter((c) => c.is_active).sort((a, b) => a.name.localeCompare(b.name)));
+    setLocations(loc.data.filter((l) => l.is_active).sort((a, b) => a.location_name.localeCompare(b.location_name)));
     setLoading(false);
   }
 
@@ -46,6 +53,8 @@ export default function Employees() {
       first_name: row.first_name || '',
       last_name: row.last_name || '',
       department_id: row.department_id || '',
+      company_id: row.company_id || '',
+      branch_id: row.branch_id || '',
       position_title: row.position_title || '',
       email: row.email || '',
       phone: row.phone || '',
@@ -59,7 +68,13 @@ export default function Employees() {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    const payload = { ...form, department_id: form.department_id || null, date_hired: form.date_hired || null };
+    const payload = {
+      ...form,
+      department_id: form.department_id || null,
+      company_id: form.company_id || null,
+      branch_id: form.branch_id || null,
+      date_hired: form.date_hired || null,
+    };
     try {
       if (editing === 'new') {
         await api.post('/employees', payload);
@@ -83,24 +98,43 @@ export default function Employees() {
     }
   }
 
-  const activeCount = rows.filter((r) => r.is_active).length;
-  const inactiveCount = rows.length - activeCount;
+  // Branches offered for the chosen company: its own, plus any location no company has been
+  // set on yet (so nothing is unpickable before Lookups > Locations is filled in). The
+  // employee's current branch stays listed even if it no longer fits, so editing doesn't
+  // silently blank it.
+  const branchOptions = locations.filter((l) => (
+    !l.company_id || String(l.company_id) === String(form.company_id) || String(l.id) === String(form.branch_id)
+  ));
+
+  function setCompany(companyId) {
+    const branch = locations.find((l) => String(l.id) === String(form.branch_id));
+    const keepBranch = branch && (!branch.company_id || String(branch.company_id) === String(companyId));
+    setForm({ ...form, company_id: companyId, branch_id: keepBranch ? form.branch_id : '' });
+  }
+
+  const companyRows = companyFilter
+    ? rows.filter((r) => (companyFilter === 'none' ? !r.company_id : String(r.company_id) === companyFilter))
+    : rows;
+  const activeCount = companyRows.filter((r) => r.is_active).length;
+  const inactiveCount = companyRows.length - activeCount;
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows.filter((r) => {
+    return companyRows.filter((r) => {
       if (status === 'active' && !r.is_active) return false;
       if (status === 'inactive' && r.is_active) return false;
       if (!q) return true;
-      const haystack = [r.employee_code, r.first_name, r.last_name, r.department_name, r.position_title, r.email]
+      const haystack = [r.employee_code, r.first_name, r.last_name, r.company_name, r.branch_name, r.department_name, r.position_title, r.email]
         .filter(Boolean).join(' ').toLowerCase();
       return haystack.includes(q);
     });
-  }, [rows, status, search]);
+  }, [companyRows, status, search]);
 
   const columns = [
     { key: 'employee_code', label: 'Code' },
     { key: 'name', label: 'Name', render: (r) => `${r.first_name} ${r.last_name}` },
+    { key: 'company_name', label: 'Company', render: (r) => r.company_name || <span className="muted">—</span> },
+    { key: 'branch_name', label: 'Branch', render: (r) => r.branch_name || <span className="muted">—</span> },
     { key: 'department_name', label: 'Department' },
     { key: 'position_title', label: 'Position' },
     { key: 'email', label: 'Email' },
@@ -115,7 +149,7 @@ export default function Employees() {
       </div>
 
       <div className="status-tabs">
-        <button className={`status-tab ${status === '' ? 'active' : ''}`} onClick={() => setStatus('')}>All ({rows.length})</button>
+        <button className={`status-tab ${status === '' ? 'active' : ''}`} onClick={() => setStatus('')}>All ({companyRows.length})</button>
         <button className={`status-tab ${status === 'active' ? 'active' : ''}`} onClick={() => setStatus('active')}>Active ({activeCount})</button>
         <button className={`status-tab ${status === 'inactive' ? 'active' : ''}`} onClick={() => setStatus('inactive')}>Inactive ({inactiveCount})</button>
       </div>
@@ -124,7 +158,15 @@ export default function Employees() {
         <div className="filter-grid">
           <div className="field">
             <label>Search</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Code, name, department, position, email..." />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Code, name, company, branch, department, position, email..." />
+          </div>
+          <div className="field">
+            <label>Company</label>
+            <select value={companyFilter} onChange={(e) => setCompanyFilter(e.target.value)}>
+              <option value="">All companies</option>
+              {companies.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+              <option value="none">No company set</option>
+            </select>
           </div>
         </div>
       </div>
@@ -171,6 +213,22 @@ export default function Employees() {
               <div className="field">
                 <label>Last Name</label>
                 <input required value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Company</label>
+                <select value={form.company_id} onChange={(e) => setCompany(e.target.value)}>
+                  <option value="">—</option>
+                  {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label>Branch</label>
+                <select value={form.branch_id} onChange={(e) => setForm({ ...form, branch_id: e.target.value })} disabled={!form.company_id}>
+                  <option value="">{form.company_id ? '—' : 'Pick a company first'}</option>
+                  {branchOptions.map((l) => <option key={l.id} value={l.id}>{l.location_name}</option>)}
+                </select>
               </div>
             </div>
             <div className="field">

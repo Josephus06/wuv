@@ -25,8 +25,12 @@ router.get('/employees', requireAuth, requireAnyPermission([ROUTE, '/attendance'
   try {
     const [rows] = await pool.query(
       `SELECT e.id, e.employee_code, CONCAT(e.first_name, ' ', e.last_name) AS name,
-              e.department_id, d.name AS department_name
-       FROM employees e LEFT JOIN departments d ON d.id = e.department_id
+              e.department_id, d.name AS department_name,
+              e.company_id, c.name AS company_name, e.branch_id, l.location_name AS branch_name
+       FROM employees e
+       LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN companies c ON c.id = e.company_id
+       LEFT JOIN locations l ON l.id = e.branch_id
        WHERE e.is_active = TRUE
        ORDER BY e.first_name, e.last_name`
     );

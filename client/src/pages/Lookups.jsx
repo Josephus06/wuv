@@ -14,10 +14,17 @@ const CONFIG = [
     { name: 'parent_account_id', label: 'Parent Account', type: 'ref', ref: 'chart-of-accounts', refLabel: 'account_name' },
     { name: 'is_active', label: 'Active', type: 'checkbox' },
   ] },
+  { key: 'companies', label: 'Companies', fields: [
+    { name: 'code', label: 'Code', type: 'text', required: true },
+    { name: 'name', label: 'Name', type: 'text', required: true },
+    { name: 'is_active', label: 'Active', type: 'checkbox' },
+  ] },
   { key: 'locations', label: 'Locations', fields: [
     { name: 'location_code', label: 'Code', type: 'text', required: true },
     { name: 'location_name', label: 'Name', type: 'text', required: true },
     { name: 'location_type', label: 'Type', type: 'select', options: ['Branch', 'Warehouse', 'Design', 'Damaged', 'Delivery Charge', 'Technical', 'Subcon', 'Other'] },
+    // The company a branch belongs to -- what scopes the Branch picker on an employee.
+    { name: 'company_id', label: 'Company', type: 'ref', ref: 'companies', refLabel: 'name' },
     { name: 'address', label: 'Address', type: 'textarea' },
     { name: 'telephone', label: 'Telephone', type: 'text' },
     { name: 'contact_person', label: 'Contact Person', type: 'text' },

@@ -91,6 +91,7 @@ const STEPS = [
 
   // HR
   ['create-attendance.js', 'shifts, shift assignments and attendance'],
+  ['create-companies.js', 'companies, and the company of each branch and employee'],
 
   // Last: registers any page the migrations above did not, and gives the seeded admin an
   // account_type plus full access to everything.
