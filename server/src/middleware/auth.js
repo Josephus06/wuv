@@ -68,4 +68,16 @@ function requireAnyPermission(routes, action = 'can_view') {
   };
 }
 
-module.exports = { requireAuth, requirePermission, requireAnyPermission };
+// The same check as requirePermission, as a yes/no for a route that serves more or less
+// depending on who asks (e.g. the employee profile, HR-only within a page others can view).
+async function userCan(userId, route, action = 'can_view') {
+  if (!PERMISSION_ACTIONS.has(action)) throw new Error(`Unknown permission action: ${action}`);
+  const [[perm]] = await pool.query(
+    `SELECT upp.${action} AS allowed FROM user_page_permissions upp
+     JOIN pages p ON p.id = upp.page_id WHERE upp.user_id = ? AND p.route = ?`,
+    [userId, route]
+  );
+  return !!(perm && perm.allowed);
+}
+
+module.exports = { requireAuth, requirePermission, requireAnyPermission, userCan };
