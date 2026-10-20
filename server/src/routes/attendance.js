@@ -4,7 +4,7 @@ const { requireAuth, requirePermission } = require('../middleware/auth');
 const {
   BUSINESS_TZ, MAX_OPEN_HOURS, HttpError,
   toDbUtc, fromDbUtc, toLocalDisplay, addDays, todayLocal, isIsoDate, parseLocalDateTime,
-  isOvernight, scheduleFor, scheduleSources, dayShift, scheduledShift, computeMetrics,
+  isOvernight, scheduleFor, scheduleSources, dayShift, scheduledShift, scheduleSnapshot, metricsFor,
   employeeForUser,
 } = require('../lib/attendance');
 
@@ -72,30 +72,6 @@ async function currentWorkDate(employeeId, now) {
     if (!taken) return { workDate: yesterday, schedule: prev };
   }
   return { workDate: today, schedule: await scheduledShift(employeeId, today) };
-}
-
-function scheduleSnapshot(schedule) {
-  return {
-    shift_id: schedule ? schedule.shift_id : null,
-    shift_name: schedule ? schedule.shift_name : null,
-    scheduled_start: schedule ? toDbUtc(schedule.start) : null,
-    scheduled_end: schedule ? toDbUtc(schedule.end) : null,
-    grace_minutes: schedule ? schedule.grace_minutes : 0,
-    break_minutes: schedule ? schedule.break_minutes : 0,
-    paid_break_minutes: schedule ? schedule.paid_break_minutes || 0 : 0,
-  };
-}
-
-function metricsFor(snapshot, timeIn, timeOut) {
-  return computeMetrics({
-    timeIn,
-    timeOut,
-    scheduledStart: fromDbUtc(snapshot.scheduled_start),
-    scheduledEnd: fromDbUtc(snapshot.scheduled_end),
-    graceMinutes: snapshot.grace_minutes,
-    breakMinutes: snapshot.break_minutes,
-    paidBreakMinutes: snapshot.paid_break_minutes || 0,
-  });
 }
 
 async function requireEmployee(req) {
@@ -219,6 +195,134 @@ function statusOf(log, schedule, now) {
   }
   return schedule.end < now ? 'Absent' : 'Scheduled';
 }
+
+// ---------------------------------------------------------------------------------------
+// DTR (Daily Time Record): the printable record of a period, one sheet per employee, with
+// EVERY date listed -- rest days and holidays included -- the way a DTR is signed off.
+// ---------------------------------------------------------------------------------------
+
+function rangeError(from, to, max = MAX_REPORT_DAYS) {
+  if (!isIsoDate(from) || !isIsoDate(to)) return 'from and to must be YYYY-MM-DD';
+  if (from > to) return 'from must be on or before to';
+  const days = Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1;
+  return days > max ? `Pick a range of at most ${max} days` : null;
+}
+
+async function buildDtr(employeeIds, from, to) {
+  if (!employeeIds.length) return [];
+  const now = new Date();
+  const [employees] = await pool.query(
+    `SELECT e.id, e.employee_code, CONCAT(e.first_name, ' ', e.last_name) AS name, e.position_title,
+            e.company_id, c.name AS company_name, l.location_name AS branch_name, d.name AS department_name
+     FROM employees e
+     LEFT JOIN companies c ON c.id = e.company_id
+     LEFT JOIN locations l ON l.id = e.branch_id
+     LEFT JOIN departments d ON d.id = e.department_id
+     WHERE e.id IN (?) ORDER BY c.name, l.location_name, e.last_name, e.first_name`,
+    [employeeIds]
+  );
+  const [logs] = await pool.query(`${LOG_SELECT} WHERE l.employee_id IN (?) AND l.work_date BETWEEN ? AND ?`, [employeeIds, from, to]);
+  const logMap = new Map(logs.map((l) => [`${l.employee_id}|${l.work_date}`, l]));
+  const sources = await scheduleSources(employeeIds, from, to);
+  // The holiday calendar belongs to payroll; before it exists a DTR simply shows none.
+  const [holidays] = await pool.query(
+    `SELECT DATE_FORMAT(holiday_date, '%Y-%m-%d') AS date, name, holiday_type, company_id
+     FROM holidays WHERE holiday_date BETWEEN ? AND ?`,
+    [from, to]
+  ).catch((err) => { if (err.code === 'ER_NO_SUCH_TABLE') return [[]]; throw err; });
+
+  const dates = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) dates.push(d);
+
+  return employees.map((emp) => {
+    const totals = { present: 0, absent: 0, rest: 0, late_minutes: 0, undertime_minutes: 0, overtime_minutes: 0, worked_minutes: 0 };
+    const days = dates.map((date) => {
+      const log = logMap.get(`${emp.id}|${date}`);
+      const planned = dayShift(sources, emp.id, date);
+      const holiday = holidays.find((h) => h.date === date && (!h.company_id || h.company_id === emp.company_id)) || null;
+      const s = serializeLog(log);
+      const schedule = log
+        ? (s.scheduled_start_local ? { name: log.shift_name, start: s.scheduled_start_local, end: s.scheduled_end_local } : null)
+        : planned ? (() => {
+          const t = scheduleFor(date, planned);
+          return { name: planned.shift_name, start: toLocalDisplay(toDbUtc(t.start)), end: toLocalDisplay(toDbUtc(t.end)) };
+        })() : null;
+
+      const remarks = [];
+      if (holiday) remarks.push(`${holiday.name} (${holiday.holiday_type === 'regular' ? 'regular holiday' : 'special day'})`);
+      if (log) {
+        totals.present += 1;
+        totals.late_minutes += log.late_minutes;
+        totals.undertime_minutes += log.undertime_minutes;
+        totals.overtime_minutes += log.overtime_minutes;
+        totals.worked_minutes += log.worked_minutes;
+        if (!schedule) remarks.push('Worked on rest day');
+        if (!log.time_out) remarks.push(now - fromDbUtc(log.time_in) > MAX_OPEN_HOURS * 3600000 ? 'No time out' : 'On duty');
+        if (log.source === 'manual') remarks.push('Entered by HR');
+        else if (log.edited_at) remarks.push('Corrected by HR');
+        if (log.remarks) remarks.push(log.remarks);
+      } else if (!planned) {
+        totals.rest += 1;
+        remarks.push('Rest day');
+      } else if (!holiday && scheduleFor(date, planned).end < now) {
+        totals.absent += 1;
+        remarks.push('Absent');
+      }
+
+      return {
+        date,
+        schedule,
+        time_in_local: s ? s.time_in_local : null,
+        time_out_local: s ? s.time_out_local : null,
+        late_minutes: log ? log.late_minutes : 0,
+        undertime_minutes: log ? log.undertime_minutes : 0,
+        overtime_minutes: log ? log.overtime_minutes : 0,
+        worked_minutes: log ? log.worked_minutes : 0,
+        remarks,
+      };
+    });
+    return { employee: emp, days, totals };
+  });
+}
+
+// HR: ?from=&to= and either ?employee_id= (one sheet) or ?company_id= (one sheet per active
+// employee of the company, optionally narrowed by ?branch_id=).
+router.get('/dtr', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
+  try {
+    const { from, to } = req.query;
+    const invalid = rangeError(from, to);
+    if (invalid) return res.status(400).json({ error: invalid });
+    let ids;
+    if (req.query.employee_id) {
+      ids = [Number(req.query.employee_id)];
+    } else if (req.query.company_id) {
+      const where = ['e.company_id = ?', 'e.is_active = TRUE'];
+      const params = [req.query.company_id];
+      if (req.query.branch_id) { where.push('e.branch_id = ?'); params.push(req.query.branch_id); }
+      const [rows] = await pool.query(`SELECT e.id FROM employees e WHERE ${where.join(' AND ')}`, params);
+      ids = rows.map((r) => r.id);
+    } else {
+      return res.status(400).json({ error: 'Choose an employee or a company' });
+    }
+    res.json({ from, to, timezone: BUSINESS_TZ, sheets: await buildDtr(ids, from, to) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// An employee's own DTR, from My Attendance.
+router.get('/me/dtr', requireAuth, async (req, res, next) => {
+  try {
+    const { from, to } = req.query;
+    const invalid = rangeError(from, to);
+    if (invalid) return res.status(400).json({ error: invalid });
+    const employee = await employeeForUser(req.user.id);
+    if (!employee) return res.status(400).json({ error: 'Your user account is not linked to an employee record.' });
+    res.json({ from, to, timezone: BUSINESS_TZ, sheets: await buildDtr([employee.id], from, to) });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // One row per employee per day in [from, to] that was either scheduled or has a record --
 // so a scheduled day with no time-in shows up as Absent, which a plain list of punches

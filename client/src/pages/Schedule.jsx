@@ -125,8 +125,10 @@ export default function Schedule() {
         const [employeeId, workDate] = key.split('|');
         return { employee_id: Number(employeeId), work_date: workDate, value };
       });
-      await api.put('/schedule', { entries });
-      setNotice(`Saved ${entries.length} change${entries.length > 1 ? 's' : ''}.`);
+      const { data: res } = await api.put('/schedule', { entries });
+      setNotice(`Saved ${entries.length} change${entries.length > 1 ? 's' : ''}.${res.remeasured
+        ? ` ${res.remeasured} time record${res.remeasured > 1 ? 's were' : ' was'} already stamped on ${res.remeasured > 1 ? 'those days and were' : 'that day and was'} re-measured against the new shift.`
+        : ''}`);
       await load();
     } catch (err) {
       setError(err.response?.data?.error || 'Save failed');

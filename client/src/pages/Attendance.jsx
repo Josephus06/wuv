@@ -5,7 +5,7 @@ import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
 import {
-  formatDate, formatLocalTime, formatMinutes, statusBadgeClass, toInputValue,
+  cutoffRange, formatDate, formatLocalTime, formatMinutes, statusBadgeClass, toInputValue,
 } from '../utils/attendance';
 
 const STATUSES = ['Present', 'Late', 'Absent', 'No Time Out', 'On Duty', 'Scheduled'];
@@ -36,6 +36,7 @@ export default function Attendance() {
   const [editing, setEditing] = useState(null); // { mode: 'new' | 'edit', row }
   const [form, setForm] = useState({});
   const [error, setError] = useState('');
+  const [dtr, setDtr] = useState(null); // the Print DTR dialog's choices
 
   async function load(f = filters) {
     setLoading(true);
@@ -124,6 +125,22 @@ export default function Attendance() {
     }
   }
 
+  function openDtr() {
+    setDtr({ ...cutoffRange(0), scope: filters.employee_id ? 'employee' : 'company', employee_id: filters.employee_id, company_id: filters.company_id, branch_id: filters.branch_id });
+  }
+
+  function printDtr(e) {
+    e.preventDefault();
+    const q = new URLSearchParams({ from: dtr.from, to: dtr.to });
+    if (dtr.scope === 'employee') q.set('employee_id', dtr.employee_id);
+    else {
+      q.set('company_id', dtr.company_id);
+      if (dtr.branch_id) q.set('branch_id', dtr.branch_id);
+    }
+    window.open(`/attendance/dtr/print?${q.toString()}`, '_blank');
+    setDtr(null);
+  }
+
   function exportCsv() {
     const header = ['Date', 'Employee Code', 'Employee', 'Company', 'Branch', 'Department', 'Shift', 'Scheduled In', 'Scheduled Out',
       'Time In', 'Time Out', 'Late (min)', 'Undertime (min)', 'Overtime (min)', 'Worked (min)', 'Status', 'Source', 'Remarks'];
@@ -201,6 +218,7 @@ export default function Attendance() {
       <div className="page-header">
         <h1>Attendance</h1>
         <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn" onClick={openDtr}>Print DTR</button>
           {rows.length > 0 && <button className="btn" onClick={exportCsv}>Export CSV</button>}
           {can('/attendance', 'can_add') && <button className="btn btn-primary" onClick={() => openAdd(null)}>Add Record</button>}
         </div>
@@ -292,6 +310,69 @@ export default function Attendance() {
           />
         )}
       </div>
+
+      {dtr && (
+        <Modal title="Print DTR" onClose={() => setDtr(null)}>
+          <form onSubmit={printDtr}>
+            <div className="field">
+              <label>Period</label>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                <button type="button" className="btn btn-sm" onClick={() => setDtr({ ...dtr, ...cutoffRange(0) })}>This cutoff</button>
+                <button type="button" className="btn btn-sm" onClick={() => setDtr({ ...dtr, ...cutoffRange(-1) })}>Last cutoff</button>
+              </div>
+              <div className="field-row">
+                <input type="date" required value={dtr.from} onChange={(e) => setDtr({ ...dtr, from: e.target.value })} />
+                <input type="date" required min={dtr.from} value={dtr.to} onChange={(e) => setDtr({ ...dtr, to: e.target.value })} />
+              </div>
+            </div>
+            <div className="field">
+              <label>Print for</label>
+              <div style={{ display: 'flex', gap: 16 }}>
+                <label className="field-checkbox" style={{ fontWeight: 400 }}>
+                  <input type="radio" name="dtr-scope" checked={dtr.scope === 'employee'} onChange={() => setDtr({ ...dtr, scope: 'employee' })} style={{ width: 'auto' }} /> One employee
+                </label>
+                <label className="field-checkbox" style={{ fontWeight: 400 }}>
+                  <input type="radio" name="dtr-scope" checked={dtr.scope === 'company'} onChange={() => setDtr({ ...dtr, scope: 'company' })} style={{ width: 'auto' }} /> Whole company
+                </label>
+              </div>
+            </div>
+            {dtr.scope === 'employee' ? (
+              <div className="field">
+                <label>Employee</label>
+                <select required value={dtr.employee_id || ''} onChange={(e) => setDtr({ ...dtr, employee_id: e.target.value })}>
+                  <option value="">— Choose —</option>
+                  {employees.map((emp) => <option key={emp.id} value={emp.id}>{emp.name}{emp.company_name ? ` (${emp.company_name})` : ''}</option>)}
+                </select>
+              </div>
+            ) : (
+              <div className="field-row">
+                <div className="field">
+                  <label>Company</label>
+                  <select required value={dtr.company_id || ''} onChange={(e) => setDtr({ ...dtr, company_id: e.target.value, branch_id: '' })}>
+                    <option value="">— Choose —</option>
+                    {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Branch (optional)</label>
+                  <select value={dtr.branch_id || ''} onChange={(e) => setDtr({ ...dtr, branch_id: e.target.value })}>
+                    <option value="">All branches</option>
+                    {[...new Map(employees
+                      .filter((emp) => emp.branch_id && String(emp.company_id) === String(dtr.company_id))
+                      .map((emp) => [emp.branch_id, emp.branch_name])).entries()]
+                      .map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                  </select>
+                </div>
+              </div>
+            )}
+            <p className="muted">Opens in a new tab: one page per employee, every date listed, with signature lines.</p>
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={() => setDtr(null)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Open DTR</button>
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {editing && (
         <Modal

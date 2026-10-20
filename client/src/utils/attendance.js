@@ -64,6 +64,22 @@ export function statusBadgeClass(status) {
   return STATUS_BADGE[status] || 'badge-muted';
 }
 
+// A semi-monthly cutoff as { from, to }: 0 = the one today falls in, -1 = the one before.
+export function cutoffRange(offset = 0) {
+  const d = new Date();
+  let year = d.getFullYear();
+  let month = d.getMonth(); // 0-based
+  let half = d.getDate() <= 15 ? 0 : 1;
+  let steps = offset;
+  while (steps < 0) { half -= 1; if (half < 0) { half = 1; month -= 1; if (month < 0) { month = 11; year -= 1; } } steps += 1; }
+  while (steps > 0) { half += 1; if (half > 1) { half = 0; month += 1; if (month > 11) { month = 0; year += 1; } } steps -= 1; }
+  const mm = String(month + 1).padStart(2, '0');
+  const last = new Date(year, month + 1, 0).getDate();
+  return half === 0
+    ? { from: `${year}-${mm}-01`, to: `${year}-${mm}-15` }
+    : { from: `${year}-${mm}-16`, to: `${year}-${mm}-${last}` };
+}
+
 // "2026-10-20 08:04" -> "2026-10-20T08:04" for <input type="datetime-local">.
 export function toInputValue(local) {
   return local ? local.replace(' ', 'T') : '';

@@ -231,6 +231,51 @@ function computeMetrics({ timeIn, timeOut, scheduledStart, scheduledEnd, graceMi
   };
 }
 
+// The schedule a time record is measured against, as stored on the record: a copy, so later
+// edits to the shift or the plotted schedule only reach a record when it is re-measured.
+function scheduleSnapshot(schedule) {
+  return {
+    shift_id: schedule ? schedule.shift_id : null,
+    shift_name: schedule ? schedule.shift_name : null,
+    scheduled_start: schedule ? toDbUtc(schedule.start) : null,
+    scheduled_end: schedule ? toDbUtc(schedule.end) : null,
+    grace_minutes: schedule ? schedule.grace_minutes : 0,
+    break_minutes: schedule ? schedule.break_minutes : 0,
+    paid_break_minutes: schedule ? schedule.paid_break_minutes || 0 : 0,
+  };
+}
+
+function metricsFor(snapshot, timeIn, timeOut) {
+  return computeMetrics({
+    timeIn,
+    timeOut,
+    scheduledStart: fromDbUtc(snapshot.scheduled_start),
+    scheduledEnd: fromDbUtc(snapshot.scheduled_end),
+    graceMinutes: snapshot.grace_minutes,
+    breakMinutes: snapshot.break_minutes,
+    paidBreakMinutes: snapshot.paid_break_minutes || 0,
+  });
+}
+
+// Re-measures the time record (if any) of one employee's day against the schedule as it is
+// NOW -- for when a supervisor changes a day's shift after the employee already timed in
+// (an emergency switch from Opening to Closing entered late). The stamped times are not
+// touched; only which shift they are measured against, and so late / undertime / overtime.
+// Returns true when there was a record to re-measure.
+async function remeasureDay(employeeId, workDate, conn = pool) {
+  const [[log]] = await conn.query(
+    'SELECT id, time_in, time_out FROM attendance_logs WHERE employee_id = ? AND work_date = ?',
+    [employeeId, workDate]
+  );
+  if (!log) return false;
+  const snapshot = scheduleSnapshot(await scheduledShift(employeeId, workDate, conn));
+  await conn.query('UPDATE attendance_logs SET ? WHERE id = ?', [{
+    ...snapshot,
+    ...metricsFor(snapshot, fromDbUtc(log.time_in), log.time_out ? fromDbUtc(log.time_out) : null),
+  }, log.id]);
+  return true;
+}
+
 // The employee record behind the logged-in user. Read fresh rather than from the JWT, so
 // linking or unlinking an employee in Users takes effect without a re-login.
 async function employeeForUser(userId) {
@@ -276,5 +321,8 @@ module.exports = {
   dayShift,
   scheduledShift,
   computeMetrics,
+  scheduleSnapshot,
+  metricsFor,
+  remeasureDay,
   employeeForUser,
 };

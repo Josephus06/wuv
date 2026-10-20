@@ -131,6 +131,7 @@ import Attendance from './pages/Attendance';
 import ShiftAssignments from './pages/ShiftAssignments';
 import Shifts from './pages/Shifts';
 import Schedule from './pages/Schedule';
+import DtrPrint from './pages/DtrPrint';
 import Payroll from './pages/Payroll';
 import PayrollRunView from './pages/PayrollRunView';
 import PayrollPayItems from './pages/PayrollPayItems';
@@ -168,6 +169,8 @@ function App() {
       <Route path="/login" element={<Login />} />
       {/* Standalone printable certificate -- protected but rendered without the app chrome. */}
       <Route path="/warranty-certificates/:id/print" element={<ProtectedRoute><WarrantyCertificatePrint /></ProtectedRoute>} />
+      {/* Daily Time Records, one sheet per employee per page -- also without the app chrome. */}
+      <Route path="/attendance/dtr/print" element={<ProtectedRoute><DtrPrint /></ProtectedRoute>} />
       <Route
         element={
           <ProtectedRoute>

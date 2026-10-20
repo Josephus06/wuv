@@ -6,7 +6,9 @@
 const express = require('express');
 const pool = require('../db');
 const { requireAuth, requirePermission, requireAnyPermission } = require('../middleware/auth');
-const { isIsoDate, addDays, weekdayOf, scheduleSources, pickAssignment } = require('../lib/attendance');
+const {
+  isIsoDate, addDays, weekdayOf, scheduleSources, pickAssignment, remeasureDay,
+} = require('../lib/attendance');
 
 const router = express.Router();
 const ROUTE = '/schedule';
@@ -73,6 +75,10 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
 
 // Saves changed cells: value 'rest' plots a rest day, a shift id plots that shift, 'default'
 // removes the plotted day so the Shift Assignment applies again.
+//
+// A day that already has a time record is re-measured against its new shift in the same
+// transaction -- the emergency Opening-to-Closing switch entered after the employee timed in
+// must not leave them marked hours late against the shift they no longer work.
 router.put('/', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
   const entries = Array.isArray(req.body.entries) ? req.body.entries : [];
   if (!entries.length) return res.status(400).json({ error: 'Nothing to save' });
@@ -83,6 +89,7 @@ router.put('/', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, r
   }
 
   const conn = await pool.getConnection();
+  let remeasured = 0;
   try {
     await conn.beginTransaction();
     const shiftIds = [...new Set(entries.filter((e) => Number(e.value) > 0).map((e) => Number(e.value)))];
@@ -100,9 +107,10 @@ router.put('/', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, r
           [e.employee_id, e.work_date, e.value === 'rest' ? null : Number(e.value), req.user.id]
         );
       }
+      if (await remeasureDay(e.employee_id, e.work_date, conn)) remeasured += 1;
     }
     await conn.commit();
-    res.json({ saved: entries.length });
+    res.json({ saved: entries.length, remeasured });
   } catch (err) {
     await conn.rollback();
     next(err);
@@ -140,8 +148,15 @@ router.post('/copy', requireAuth, requirePermission(ROUTE, 'can_edit'), async (r
       'INSERT INTO employee_schedules (employee_id, work_date, shift_id, updated_by_user_id) VALUES ?',
       [rows.map((r) => [r.employee_id, addDays(r.work_date, offset), r.shift_id, req.user.id])]
     );
+    // Days of the target week that were already worked follow the copied plan too.
+    const [logs] = await conn.query(
+      `SELECT employee_id, DATE_FORMAT(work_date, '%Y-%m-%d') AS work_date FROM attendance_logs
+       WHERE employee_id IN (?) AND work_date BETWEEN ? AND ?`,
+      [ids, to, addDays(to, 6)]
+    );
+    for (const l of logs) await remeasureDay(l.employee_id, l.work_date, conn);
     await conn.commit();
-    res.json({ copied: rows.length, week_start: to });
+    res.json({ copied: rows.length, remeasured: logs.length, week_start: to });
   } catch (err) {
     await conn.rollback();
     next(err);

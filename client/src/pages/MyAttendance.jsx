@@ -4,8 +4,13 @@ import DataTable from '../components/DataTable';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { parseUtc } from '../utils/datetime';
 import {
-  formatDate, formatLocalTime, formatMinutes, formatShiftHours, statusBadgeClass,
+  cutoffRange, formatDate, formatLocalTime, formatMinutes, formatShiftHours, statusBadgeClass,
 } from '../utils/attendance';
+
+function openMyDtr(offset) {
+  const { from, to } = cutoffRange(offset);
+  window.open(`/attendance/dtr/print?mine=1&from=${from}&to=${to}`, '_blank');
+}
 
 // Every logged-in user's own time clock. The stamp itself is taken by the server at the
 // moment of the request -- the clock shown here is only for reading.
@@ -157,7 +162,13 @@ export default function MyAttendance() {
       )}
 
       <div className="card">
-        <h3 style={{ marginTop: 0 }}>Last 14 days</h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+          <h3 style={{ margin: 0 }}>Last 14 days</h3>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button type="button" className="btn btn-sm" onClick={() => openMyDtr(0)}>Print DTR · this cutoff</button>
+            <button type="button" className="btn btn-sm" onClick={() => openMyDtr(-1)}>Last cutoff</button>
+          </div>
+        </div>
         <DataTable columns={columns} rows={data?.recent || []} emptyLabel="No time records yet." />
       </div>
     </div>
