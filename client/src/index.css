@@ -652,6 +652,25 @@ button.progress-bar:disabled { cursor: not-allowed; opacity: 0.6; }
 .login-submit-v2:hover { background: #3A4E20; }
 .login-submit-v2:disabled { opacity: 0.6; cursor: not-allowed; }
 
+/* Fixed-light like the rest of the login card. */
+.login-app-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 28px;
+  padding: 12px 14px;
+  border: 1px solid rgba(74, 99, 41, 0.35);
+  border-radius: 12px;
+  color: #14213d;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.login-app-link:hover { background: rgba(74, 99, 41, 0.08); border-color: #4A6329; }
+.login-app-link svg { width: 26px; height: 26px; flex-shrink: 0; color: #4A6329; }
+.login-app-link span { display: flex; flex-direction: column; gap: 2px; }
+.login-app-link strong { font-size: 13px; font-weight: 700; }
+.login-app-link small { font-size: 11.5px; color: #5c6b5a; }
+
 .login-footer {
   position: fixed;
   bottom: 16px;

@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
+import { Capacitor } from '@capacitor/core';
 import { COMPANY } from '../config/company';
+
+const TIMECLOCK_APK = '/downloads/wvi-timeclock.apk';
 
 // The company's own product-showcase graphics (Room Nameplates, Yearbooks, Booth
 // Fabrication, Acrylic Medals) -- faded into a 2x2 collage behind the sign-in card
@@ -67,6 +70,22 @@ export default function Login() {
           <button className="login-submit-v2" disabled={loading}>
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
+
+          {/* The employee Time Clock app (timeclock/), served from client/public/downloads.
+              Not offered inside the ERP's own Android build -- that is already an app, and
+              an APK download from inside a WebView goes nowhere useful. */}
+          {!Capacitor.isNativePlatform() && (
+            <a className="login-app-link" href={TIMECLOCK_APK} download="WVI-TimeClock.apk">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="6" y="2" width="12" height="20" rx="2.5" />
+                <path d="M12 7v7M9 11l3 3 3-3M10 18h4" />
+              </svg>
+              <span>
+                <strong>Time Clock app for employees</strong>
+                <small>Download for Android · 4.9 MB</small>
+              </span>
+            </a>
+          )}
         </div>
       </form>
 
