@@ -263,7 +263,7 @@ export default function ShiftAssignments() {
               <p className="muted" style={{ marginTop: -4 }}>
                 {form.effective_to
                   ? 'A temporary assignment: it takes priority for these dates, and the employee’s regular schedule resumes afterwards.'
-                  : 'An employee’s current open-ended assignment will end the day before this one starts.'}
+                  : 'An employee’s current open-ended assignment on the same weekdays will end the day before this one starts. Assignments on other weekdays (e.g. a separate Saturday shift) are kept.'}
               </p>
             )}
 

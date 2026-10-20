@@ -17,12 +17,13 @@ const canViewShifts = requireAnyPermission(['/shifts', '/shift-assignments', '/a
 router.get('/', requireAuth, canViewShifts, async (req, res, next) => {
   try {
     const [rows] = await pool.query(
-      `SELECT s.*,
+      `SELECT s.*, l.location_name AS branch_name,
               (SELECT COUNT(DISTINCT a.employee_id) FROM employee_shift_assignments a
                WHERE a.shift_id = s.id AND a.effective_from <= ?
                  AND (a.effective_to IS NULL OR a.effective_to >= ?)) AS assigned_count
        FROM shifts s
-       ORDER BY s.is_active DESC, s.start_time, s.name`,
+       LEFT JOIN locations l ON l.id = s.branch_id
+       ORDER BY s.is_active DESC, l.location_name, s.start_time, s.name`,
       [todayLocal(), todayLocal()]
     );
     res.json(rows.map(withFlags));
@@ -37,12 +38,14 @@ function readBody(body) {
   const endTime = body.end_time;
   const grace = Number(body.grace_minutes ?? 0);
   const brk = Number(body.break_minutes ?? 0);
+  const paidBrk = Number(body.paid_break_minutes ?? 0);
 
   if (!name) return { error: 'Shift name is required' };
   if (!isTime(startTime) || !isTime(endTime)) return { error: 'Start and end time must be HH:MM' };
   if (startTime.slice(0, 5) === endTime.slice(0, 5)) return { error: 'Start and end time cannot be the same' };
   if (!Number.isInteger(grace) || grace < 0 || grace > 240) return { error: 'Grace minutes must be a whole number from 0 to 240' };
   if (!Number.isInteger(brk) || brk < 0 || brk > 480) return { error: 'Break minutes must be a whole number from 0 to 480' };
+  if (!Number.isInteger(paidBrk) || paidBrk < 0 || paidBrk > 240) return { error: 'Paid break minutes must be a whole number from 0 to 240' };
 
   return {
     values: {
@@ -51,6 +54,8 @@ function readBody(body) {
       end_time: endTime,
       grace_minutes: grace,
       break_minutes: brk,
+      paid_break_minutes: paidBrk,
+      branch_id: body.branch_id ? Number(body.branch_id) : null,
       description: body.description ? String(body.description).trim() : null,
       is_active: body.is_active ?? true,
     },

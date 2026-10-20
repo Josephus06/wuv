@@ -4,7 +4,7 @@ const { requireAuth, requirePermission } = require('../middleware/auth');
 const {
   BUSINESS_TZ, MAX_OPEN_HOURS, HttpError,
   toDbUtc, fromDbUtc, toLocalDisplay, addDays, todayLocal, isIsoDate, parseLocalDateTime,
-  isOvernight, scheduleFor, pickAssignment, assignmentsFor, scheduledShift, computeMetrics,
+  isOvernight, scheduleFor, scheduleSources, dayShift, scheduledShift, computeMetrics,
   employeeForUser,
 } = require('../lib/attendance');
 
@@ -13,7 +13,7 @@ const ROUTE = '/attendance';
 const MAX_REPORT_DAYS = 62;
 
 const LOG_SELECT = `
-  SELECT l.*, DATE_FORMAT(l.work_date, '%Y-%m-%d') AS work_date, s.name AS shift_name
+  SELECT l.*, DATE_FORMAT(l.work_date, '%Y-%m-%d') AS work_date, COALESCE(l.shift_name, s.name) AS shift_name
   FROM attendance_logs l
   LEFT JOIN shifts s ON s.id = l.shift_id`;
 
@@ -77,10 +77,12 @@ async function currentWorkDate(employeeId, now) {
 function scheduleSnapshot(schedule) {
   return {
     shift_id: schedule ? schedule.shift_id : null,
+    shift_name: schedule ? schedule.shift_name : null,
     scheduled_start: schedule ? toDbUtc(schedule.start) : null,
     scheduled_end: schedule ? toDbUtc(schedule.end) : null,
     grace_minutes: schedule ? schedule.grace_minutes : 0,
     break_minutes: schedule ? schedule.break_minutes : 0,
+    paid_break_minutes: schedule ? schedule.paid_break_minutes || 0 : 0,
   };
 }
 
@@ -92,6 +94,7 @@ function metricsFor(snapshot, timeIn, timeOut) {
     scheduledEnd: fromDbUtc(snapshot.scheduled_end),
     graceMinutes: snapshot.grace_minutes,
     breakMinutes: snapshot.break_minutes,
+    paidBreakMinutes: snapshot.paid_break_minutes || 0,
   });
 }
 
@@ -261,18 +264,14 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
       [logs.length ? logs.map((l) => l.employee_id) : [0], ...empParams]
     );
 
-    const assignments = await assignmentsFor(employees.map((e) => e.id), from, to);
-    const byEmployee = new Map();
-    for (const a of assignments) {
-      if (!byEmployee.has(a.employee_id)) byEmployee.set(a.employee_id, []);
-      byEmployee.get(a.employee_id).push(a);
-    }
+    // Who was meant to work when: plotted days first, then Shift Assignments.
+    const sources = await scheduleSources(employees.map((e) => e.id), from, to);
 
     const rows = [];
     for (let date = to; date >= from; date = addDays(date, -1)) {
       for (const emp of employees) {
         const log = logMap.get(`${emp.id}|${date}`);
-        const assignment = log ? null : pickAssignment(byEmployee.get(emp.id) || [], date);
+        const assignment = log ? null : dayShift(sources, emp.id, date);
         if (!log && (!assignment || !emp.is_active)) continue;
         const schedule = assignment ? scheduleFor(date, assignment) : null;
         const s = serializeLog(log);
@@ -390,10 +389,12 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
 
     await pool.query('UPDATE attendance_logs SET ? WHERE id = ?', [{
       shift_id: snapshot.shift_id,
+      shift_name: snapshot.shift_name,
       scheduled_start: snapshot.scheduled_start,
       scheduled_end: snapshot.scheduled_end,
       grace_minutes: snapshot.grace_minutes,
       break_minutes: snapshot.break_minutes,
+      paid_break_minutes: snapshot.paid_break_minutes || 0,
       time_in: toDbUtc(timeIn),
       time_out: timeOut ? toDbUtc(timeOut) : null,
       ...metricsFor(snapshot, timeIn, timeOut),

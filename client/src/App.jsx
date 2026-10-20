@@ -130,6 +130,7 @@ import MyAttendance from './pages/MyAttendance';
 import Attendance from './pages/Attendance';
 import ShiftAssignments from './pages/ShiftAssignments';
 import Shifts from './pages/Shifts';
+import Schedule from './pages/Schedule';
 import Payroll from './pages/Payroll';
 import PayrollRunView from './pages/PayrollRunView';
 import PayrollPayItems from './pages/PayrollPayItems';
@@ -334,6 +335,7 @@ function App() {
         <Route path="/attendance" element={<Attendance />} />
         <Route path="/shift-assignments" element={<ShiftAssignments />} />
         <Route path="/shifts" element={<Shifts />} />
+        <Route path="/schedule" element={<Schedule />} />
         <Route path="/payroll" element={<Payroll />} />
         <Route path="/payroll/:id" element={<PayrollRunView />} />
         <Route path="/payroll-pay-items" element={<PayrollPayItems />} />

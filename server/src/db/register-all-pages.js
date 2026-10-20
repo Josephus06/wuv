@@ -48,6 +48,7 @@ const PAGES = [
   { route: '/shifts',                         name: 'Shifts',                      module: 'HR' },
   { route: '/shift-assignments',              name: 'Shift Assignments',           module: 'HR' },
   { route: '/attendance',                     name: 'Attendance',                  module: 'HR' },
+  { route: '/schedule',                       name: 'Schedule',                    module: 'HR' },
   { route: '/payroll',                        name: 'Payroll',                     module: 'HR' },
   { route: '/payroll-settings',               name: 'Payroll Settings',            module: 'HR' },
   { route: '/payroll-holidays',               name: 'Holidays',                    module: 'HR' },

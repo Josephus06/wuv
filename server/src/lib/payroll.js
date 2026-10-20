@@ -3,6 +3,8 @@
 // rate in employee_compensation and the rules in payroll_rule_sets.
 //
 // HOW A DAY IS PAID
+//   Who works when comes from the supervisor's plotted schedule where a day is plotted, and
+//   from the employee's Shift Assignments otherwise (lib/attendance dayShift).
 //   Each day is a kind (lib/payrollRules dayKind): ordinary, rest day (not scheduled), special
 //   or regular holiday, or a holiday on a rest day; each kind has a Labor Code multiplier.
 //
@@ -24,7 +26,7 @@
 // month pay. Each is a warning or a later module, never a silent guess.
 const pool = require('../db');
 const {
-  assignmentsFor, pickAssignment, addDays, todayLocal, toLocalDisplay, fromDbUtc,
+  scheduleSources, dayShift, addDays, todayLocal, toLocalDisplay, fromDbUtc,
 } = require('./attendance');
 const {
   withDefaults, round2, sssContribution, philhealthContribution, pagibigContribution,
@@ -98,7 +100,7 @@ async function loadInputs(run, conn) {
     [companyId, end, start]
   );
   const ids = employees.map((e) => e.id);
-  if (!ids.length) return { employees, comps: new Map(), assignments: [], logs: [], holidays: new Map(), payItems: [], loans: [], loanPaid: new Map(), adjustments: [] };
+  if (!ids.length) return { employees, comps: new Map(), sources: { assignments: new Map(), plotted: new Map() }, logs: [], holidays: new Map(), payItems: [], loans: [], loanPaid: new Map(), adjustments: [] };
 
   const [compRows] = await conn.query(
     `SELECT employee_id, DATE_FORMAT(effective_date, '%Y-%m-%d') AS effective_date, pay_type, base_rate,
@@ -112,7 +114,7 @@ async function loadInputs(run, conn) {
 
   const [logs] = await conn.query(
     `SELECT id, employee_id, DATE_FORMAT(work_date, '%Y-%m-%d') AS work_date, scheduled_start, scheduled_end,
-            break_minutes, time_in, time_out, late_minutes, undertime_minutes, overtime_minutes, worked_minutes
+            break_minutes, paid_break_minutes, time_in, time_out, late_minutes, undertime_minutes, overtime_minutes, worked_minutes
      FROM attendance_logs WHERE employee_id IN (?) AND work_date BETWEEN ? AND ?`,
     [ids, lookback, end]
   );
@@ -158,7 +160,7 @@ async function loadInputs(run, conn) {
   );
 
   return {
-    employees, comps, assignments: await assignmentsFor(ids, lookback, end, conn), logs, holidays,
+    employees, comps, sources: await scheduleSources(ids, lookback, end, conn), logs, holidays,
     payItems, loans, loanPaid, adjustments,
   };
 }
@@ -180,10 +182,10 @@ function computeEmployee(emp, comp, ctx) {
   const computeOt = emp.compute_ot_pay !== 0; // blank = yes; only an explicit No exempts
   const computeAbsences = emp.compute_absences !== 0;
 
-  const myAssignments = ctx.assignments.filter((a) => a.employee_id === emp.id);
+  const shiftOn = (d) => dayShift(ctx.sources, emp.id, d);
   const myLogs = new Map(ctx.logs.filter((l) => l.employee_id === emp.id).map((l) => [l.work_date, l]));
-  if (!myAssignments.some((a) => a.effective_from <= run.period_end && (!a.effective_to || a.effective_to >= run.period_start))) {
-    warnings.push('No shift assigned for this cutoff, so absences cannot be counted. Assign a shift under HR → Shift Assignments.');
+  if (!dateRange(run.period_start, run.period_end).some((d) => shiftOn(d))) {
+    warnings.push('No schedule for this cutoff, so absences cannot be counted. Plot it under HR → Schedule, or assign a shift under HR → Shift Assignments.');
   }
 
   const employedOn = (d) => (!emp.date_hired || d >= emp.date_hired) && (!emp.date_separated || d <= emp.date_separated);
@@ -192,7 +194,7 @@ function computeEmployee(emp, comp, ctx) {
   function presentBefore(date) {
     for (let i = 1; i <= 7; i += 1) {
       const d = addDays(date, -i);
-      if (!pickAssignment(myAssignments, d)) continue;
+      if (!shiftOn(d)) continue;
       return myLogs.has(d) || holidays.has(d);
     }
     return true; // no scheduled day in the week before: nothing to forfeit it on
@@ -218,8 +220,7 @@ function computeEmployee(emp, comp, ctx) {
   };
 
   for (const date of dateRange(run.period_start, run.period_end)) {
-    const assignment = pickAssignment(myAssignments, date);
-    const scheduled = !!assignment;
+    const scheduled = !!shiftOn(date);
     const holiday = holidays.get(date);
     const kind = dayKind({ scheduled, holidayType: holiday?.holiday_type });
     const mult = rules.day_multipliers[kind];
@@ -240,7 +241,8 @@ function computeEmployee(emp, comp, ctx) {
       let regMin;
       let otRaw;
       if (log.scheduled_start && log.scheduled_end) {
-        const schedMin = Math.max(0, minutesBetween(log.scheduled_start, log.scheduled_end) - (log.break_minutes || 0));
+        // Paid breaks (outside Shift In / Out) are part of the day's paid time.
+        const schedMin = Math.max(0, minutesBetween(log.scheduled_start, log.scheduled_end) - (log.break_minutes || 0) + (log.paid_break_minutes || 0));
         regMin = Math.max(0, Math.min(schedMin, fullDayMin) - log.late_minutes - log.undertime_minutes);
         otRaw = log.overtime_minutes;
         lateMin += log.late_minutes;

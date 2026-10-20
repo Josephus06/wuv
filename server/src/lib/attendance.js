@@ -119,24 +119,27 @@ function scheduleFor(workDate, shift) {
   return { start, end };
 }
 
-// The assignment that governs one employee's day: the latest-starting one whose window
-// covers the date. A covering assignment that does not include that weekday makes the day a
-// rest day (null), rather than falling through to an older assignment.
+// The assignment that governs one employee's day: of the assignments covering the date AND
+// working that weekday, the latest-starting one. Weekday-aware so one person can hold two at
+// once -- Main Office's Mon-Fri shift beside its shorter Saturday one. A day no assignment
+// works is a rest day (null).
 function pickAssignment(assignments, workDate) {
+  const weekday = weekdayOf(workDate);
   const covering = assignments
-    .filter((a) => a.effective_from <= workDate && (!a.effective_to || a.effective_to >= workDate))
+    .filter((a) => a.effective_from <= workDate && (!a.effective_to || a.effective_to >= workDate)
+      && parseDays(a.days_of_week).includes(weekday))
     .sort((a, b) => (a.effective_from < b.effective_from ? 1 : -1));
-  const a = covering[0];
-  if (!a) return null;
-  return parseDays(a.days_of_week).includes(weekdayOf(workDate)) ? a : null;
+  return covering[0] || null;
 }
+
+const SHIFT_FIELDS = `s.name AS shift_name, s.start_time, s.end_time, s.grace_minutes, s.break_minutes,
+         COALESCE(s.paid_break_minutes, 0) AS paid_break_minutes`;
 
 const ASSIGNMENT_SELECT = `
   SELECT a.id AS assignment_id, a.employee_id, a.shift_id,
          DATE_FORMAT(a.effective_from, '%Y-%m-%d') AS effective_from,
          DATE_FORMAT(a.effective_to, '%Y-%m-%d') AS effective_to,
-         a.days_of_week, s.name AS shift_name, s.start_time, s.end_time,
-         s.grace_minutes, s.break_minutes
+         a.days_of_week, ${SHIFT_FIELDS}
   FROM employee_shift_assignments a
   JOIN shifts s ON s.id = a.shift_id`;
 
@@ -150,12 +153,57 @@ async function assignmentsFor(employeeIds, from, to, conn = pool) {
   return rows;
 }
 
-// The scheduled shift for one employee on one work date, or null for a rest day / no
-// assignment. Carries the UTC start and end so callers can compare against punches.
+// A supervisor's plotted days (employee_schedules) in a range, keyed "employeeId|date". The
+// value is the shift, or null for a plotted rest day -- a key that is present always wins
+// over the Shift Assignment, null included.
+async function plottedFor(employeeIds, from, to, conn = pool) {
+  const plotted = new Map();
+  if (!employeeIds.length) return plotted;
+  const [rows] = await conn.query(
+    `SELECT es.employee_id, DATE_FORMAT(es.work_date, '%Y-%m-%d') AS work_date, es.shift_id, ${SHIFT_FIELDS}
+     FROM employee_schedules es LEFT JOIN shifts s ON s.id = es.shift_id
+     WHERE es.employee_id IN (?) AND es.work_date BETWEEN ? AND ?`,
+    [employeeIds, from, to]
+  ).catch((err) => {
+    if (err.code === 'ER_NO_SUCH_TABLE') return [[]]; // before add-schedules.js has run
+    throw err;
+  });
+  for (const r of rows) plotted.set(`${r.employee_id}|${r.work_date}`, r.shift_id ? r : null);
+  return plotted;
+}
+
+// Everything that decides who works when, for a set of employees over a range.
+async function scheduleSources(employeeIds, from, to, conn = pool) {
+  const [assignments, plotted] = await Promise.all([
+    assignmentsFor(employeeIds, from, to, conn),
+    plottedFor(employeeIds, from, to, conn),
+  ]);
+  const byEmployee = new Map();
+  for (const a of assignments) {
+    if (!byEmployee.has(a.employee_id)) byEmployee.set(a.employee_id, []);
+    byEmployee.get(a.employee_id).push(a);
+  }
+  return { assignments: byEmployee, plotted };
+}
+
+// The shift one employee works on one date: the plotted day if there is one, otherwise their
+// Shift Assignment for that weekday. Null = rest day. `plotted: true` marks a plotted day.
+function dayShift(sources, employeeId, date) {
+  const key = `${employeeId}|${date}`;
+  if (sources.plotted.has(key)) {
+    const p = sources.plotted.get(key);
+    return p ? { ...p, plotted: true } : null;
+  }
+  return pickAssignment(sources.assignments.get(employeeId) || [], date);
+}
+
+// The scheduled shift for one employee on one work date, or null for a rest day / nothing
+// scheduled. Carries the UTC start and end so callers can compare against punches.
 async function scheduledShift(employeeId, workDate, conn = pool) {
-  const a = pickAssignment(await assignmentsFor([employeeId], workDate, workDate, conn), workDate);
-  if (!a) return null;
-  return { ...a, ...scheduleFor(workDate, a) };
+  const sources = await scheduleSources([employeeId], workDate, workDate, conn);
+  const s = dayShift(sources, employeeId, workDate);
+  if (!s) return null;
+  return { ...s, ...scheduleFor(workDate, s) };
 }
 
 function minutesBetween(a, b) {
@@ -165,9 +213,10 @@ function minutesBetween(a, b) {
 // Late / undertime / overtime / worked minutes for one record. Late counts from the
 // scheduled start, but only once the grace period is used up: 08:04 on a 5-minute grace is
 // on time, 08:06 is 6 minutes late. Break minutes come off worked time only when the record
-// spans more than the break itself. A record with no schedule (unscheduled day) still gets
-// its worked time; the schedule-relative figures stay zero.
-function computeMetrics({ timeIn, timeOut, scheduledStart, scheduledEnd, graceMinutes = 0, breakMinutes = 0 }) {
+// spans more than the break itself; paid-break minutes (the 15-minute breaks outside Shift
+// In / Out) are added back. A record with no schedule (unscheduled day) still gets its worked
+// time; the schedule-relative figures stay zero.
+function computeMetrics({ timeIn, timeOut, scheduledStart, scheduledEnd, graceMinutes = 0, breakMinutes = 0, paidBreakMinutes = 0 }) {
   const lateRaw = scheduledStart ? minutesBetween(scheduledStart, timeIn) : 0;
   const late = lateRaw > graceMinutes ? lateRaw : 0;
   if (!timeOut) {
@@ -178,7 +227,7 @@ function computeMetrics({ timeIn, timeOut, scheduledStart, scheduledEnd, graceMi
     late_minutes: late,
     undertime_minutes: scheduledEnd ? Math.max(0, minutesBetween(timeOut, scheduledEnd)) : 0,
     overtime_minutes: scheduledEnd ? Math.max(0, minutesBetween(scheduledEnd, timeOut)) : 0,
-    worked_minutes: span > breakMinutes ? span - breakMinutes : span,
+    worked_minutes: (span > breakMinutes ? span - breakMinutes : span) + (span > breakMinutes ? paidBreakMinutes : 0),
   };
 }
 
@@ -222,6 +271,9 @@ module.exports = {
   scheduleFor,
   pickAssignment,
   assignmentsFor,
+  plottedFor,
+  scheduleSources,
+  dayShift,
   scheduledShift,
   computeMetrics,
   employeeForUser,

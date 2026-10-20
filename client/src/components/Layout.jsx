@@ -47,6 +47,7 @@ const NAV_STRUCTURE = [
           // pages row -- the API only ever stamps the caller's own employee.
           { route: '/my-attendance', label: 'My Attendance', forEmployees: true },
           { route: '/attendance', label: 'Attendance' },
+          { route: '/schedule', label: 'Schedule' },
           { route: '/shift-assignments', label: 'Shift Assignments' },
           { route: '/shifts', label: 'Shifts' },
         ],

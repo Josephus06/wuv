@@ -93,11 +93,12 @@ function readBody(body) {
   };
 }
 
-// Assignments for one employee that share at least one day with [from, to] (to = null is
-// open-ended), other than `exceptId`.
-async function overlapping(conn, employeeId, from, to, exceptId = 0) {
+// Assignments for one employee that overlap [from, to] (to = null is open-ended) AND work at
+// least one of the same weekdays, other than `exceptId`. Assignments on different weekdays
+// never clash: Mon-Fri on one shift and Saturday on another is a normal schedule.
+async function overlapping(conn, employeeId, from, to, days, exceptId = 0) {
   const [rows] = await conn.query(
-    `SELECT id, DATE_FORMAT(effective_from, '%Y-%m-%d') AS effective_from,
+    `SELECT id, days_of_week, DATE_FORMAT(effective_from, '%Y-%m-%d') AS effective_from,
             DATE_FORMAT(effective_to, '%Y-%m-%d') AS effective_to
      FROM employee_shift_assignments
      WHERE employee_id = ? AND id <> ?
@@ -106,7 +107,8 @@ async function overlapping(conn, employeeId, from, to, exceptId = 0) {
      FOR UPDATE`,
     [employeeId, exceptId, from, to, to]
   );
-  return rows;
+  const wanted = new Set(parseDays(days));
+  return rows.filter((r) => parseDays(r.days_of_week).some((d) => wanted.has(d)));
 }
 
 function describe(a) {
@@ -154,7 +156,7 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
     const ended = [];
     const created = [];
     for (const employeeId of employeeIds) {
-      const rows = await overlapping(conn, employeeId, values.effective_from, values.effective_to);
+      const rows = await overlapping(conn, employeeId, values.effective_from, values.effective_to, values.days_of_week);
       const blocking = rows.filter((r) => r.effective_from >= values.effective_from);
       if (blocking.length) {
         clashes.push(`${names.get(employeeId)} already has ${blocking.map(describe).join(', ')}`);
@@ -202,7 +204,7 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
     const [[current]] = await conn.query('SELECT employee_id FROM employee_shift_assignments WHERE id = ?', [req.params.id]);
     if (!current) { await conn.rollback(); return res.status(404).json({ error: 'Not found' }); }
 
-    const clashes = (await overlapping(conn, current.employee_id, values.effective_from, values.effective_to, req.params.id))
+    const clashes = (await overlapping(conn, current.employee_id, values.effective_from, values.effective_to, values.days_of_week, req.params.id))
       .filter((r) => r.effective_from === values.effective_from);
     if (clashes.length) {
       await conn.rollback();

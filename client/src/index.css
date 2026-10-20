@@ -1949,3 +1949,24 @@ tr.clickable:hover td { background: var(--accent-bg); }
 .settings-grid h3 { margin-top: 0; }
 .settings-wide { grid-column: 1 / -1; }
 .settings-pairs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0 12px; }
+
+/* ---- Schedule (weekly plotting) ---- */
+.schedule-toolbar { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+.schedule-toolbar .field { margin-bottom: 0; min-width: 240px; }
+.schedule-week { display: flex; gap: 6px; align-items: center; }
+.schedule-week input { width: auto; }
+.schedule-grid { min-width: 900px; }
+.schedule-grid th { text-align: center; white-space: nowrap; }
+.schedule-grid th:first-child { text-align: left; }
+.schedule-grid th .muted { font-weight: 400; font-size: 11px; }
+.schedule-grid th.is-today { color: var(--accent); }
+.schedule-emp { min-width: 160px; }
+.schedule-emp .muted { font-size: 11px; }
+.schedule-cell { padding: 4px; min-width: 110px; vertical-align: top; }
+.schedule-cell select { padding: 4px 6px; font-size: 12px; border-radius: 6px; }
+.schedule-cell.is-shift select { background: var(--accent-bg); border-color: transparent; color: var(--text-h); font-weight: 600; }
+.schedule-cell.is-rest select { background: var(--bg); color: var(--text); }
+.schedule-cell.is-default select { font-weight: 400; font-style: italic; }
+.schedule-cell.is-changed select { outline: 2px solid var(--warning); outline-offset: -1px; }
+.schedule-time { font-size: 10.5px; color: var(--text); opacity: 0.85; margin-top: 2px; text-align: center; }
+.schedule-grid tfoot th { background: var(--bg); font-weight: 600; }
