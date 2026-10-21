@@ -7,72 +7,13 @@ const {
   isOvernight, scheduleFor, scheduleSources, dayShift, scheduledShift, scheduleSnapshot, metricsFor,
   employeeForUser,
 } = require('../lib/attendance');
+const {
+  LOG_SELECT, serializeLog, clockStatus, stampIn, stampOut,
+} = require('../lib/timeClock');
 
 const router = express.Router();
 const ROUTE = '/attendance';
 const MAX_REPORT_DAYS = 62;
-
-const LOG_SELECT = `
-  SELECT l.*, DATE_FORMAT(l.work_date, '%Y-%m-%d') AS work_date, COALESCE(l.shift_name, s.name) AS shift_name
-  FROM attendance_logs l
-  LEFT JOIN shifts s ON s.id = l.shift_id`;
-
-function serializeLog(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    employee_id: row.employee_id,
-    work_date: row.work_date,
-    shift_id: row.shift_id,
-    shift_name: row.shift_name || null,
-    scheduled_start_local: toLocalDisplay(row.scheduled_start),
-    scheduled_end_local: toLocalDisplay(row.scheduled_end),
-    time_in: row.time_in,
-    time_out: row.time_out,
-    time_in_local: toLocalDisplay(row.time_in),
-    time_out_local: toLocalDisplay(row.time_out),
-    late_minutes: row.late_minutes,
-    undertime_minutes: row.undertime_minutes,
-    overtime_minutes: row.overtime_minutes,
-    worked_minutes: row.worked_minutes,
-    source: row.source,
-    remarks: row.remarks,
-    original_time_in_local: toLocalDisplay(row.original_time_in),
-    original_time_out_local: toLocalDisplay(row.original_time_out),
-    edited_at: row.edited_at,
-  };
-}
-
-function openThreshold(now) {
-  return toDbUtc(new Date(now.getTime() - MAX_OPEN_HOURS * 3600000));
-}
-
-// The most recent time-in still waiting for its time-out, if it is recent enough to still
-// be running (see MAX_OPEN_HOURS).
-async function openLog(employeeId, now, conn = pool) {
-  const [[row]] = await conn.query(
-    `${LOG_SELECT} WHERE l.employee_id = ? AND l.time_out IS NULL AND l.time_in >= ?
-     ORDER BY l.time_in DESC LIMIT 1`,
-    [employeeId, openThreshold(now)]
-  );
-  return row || null;
-}
-
-// Which work date a time-in made right now belongs to. Normally today -- but at 01:30
-// during a 22:00-06:00 shift that started yesterday, it is yesterday's shift being
-// (late) clocked into, as long as yesterday has no record yet.
-async function currentWorkDate(employeeId, now) {
-  const today = todayLocal(now);
-  const yesterday = addDays(today, -1);
-  const prev = await scheduledShift(employeeId, yesterday);
-  if (prev && isOvernight(prev) && now < prev.end) {
-    const [[taken]] = await pool.query(
-      'SELECT id FROM attendance_logs WHERE employee_id = ? AND work_date = ?', [employeeId, yesterday]
-    );
-    if (!taken) return { workDate: yesterday, schedule: prev };
-  }
-  return { workDate: today, schedule: await scheduledShift(employeeId, today) };
-}
 
 async function requireEmployee(req) {
   const employee = await employeeForUser(req.user.id);
@@ -94,9 +35,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
       return res.json({ employee: null, timezone: BUSINESS_TZ, now_local: toLocalDisplay(toDbUtc(now)) });
     }
 
-    const open = await openLog(employee.id, now);
-    const { workDate, schedule } = await currentWorkDate(employee.id, now);
-    const [[todayLog]] = await pool.query(`${LOG_SELECT} WHERE l.employee_id = ? AND l.work_date = ?`, [employee.id, workDate]);
+    const status = await clockStatus(employee.id, now);
     const [recent] = await pool.query(
       `${LOG_SELECT} WHERE l.employee_id = ? AND l.work_date >= ? ORDER BY l.work_date DESC`,
       [employee.id, addDays(todayLocal(now), -13)]
@@ -106,19 +45,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
       employee,
       timezone: BUSINESS_TZ,
       now_local: toLocalDisplay(toDbUtc(now)),
-      open_log: serializeLog(open),
-      today: {
-        work_date: workDate,
-        shift: schedule ? {
-          name: schedule.shift_name,
-          start_time: schedule.start_time,
-          end_time: schedule.end_time,
-          grace_minutes: schedule.grace_minutes,
-          scheduled_start_local: toLocalDisplay(toDbUtc(schedule.start)),
-          scheduled_end_local: toLocalDisplay(toDbUtc(schedule.end)),
-        } : null,
-        log: serializeLog(todayLog),
-      },
+      ...status,
       recent: recent.map(serializeLog),
     });
   } catch (err) {
@@ -129,31 +56,8 @@ router.get('/me', requireAuth, async (req, res, next) => {
 router.post('/me/time-in', requireAuth, async (req, res, next) => {
   try {
     const employee = await requireEmployee(req);
-    const now = new Date();
-
-    const open = await openLog(employee.id, now);
-    if (open) {
-      return res.status(409).json({ error: `You are still timed in since ${toLocalDisplay(open.time_in)}. Time out first.` });
-    }
-
-    const { workDate, schedule } = await currentWorkDate(employee.id, now);
-    const snapshot = scheduleSnapshot(schedule);
-    const [result] = await pool.query('INSERT INTO attendance_logs SET ?', [{
-      employee_id: employee.id,
-      work_date: workDate,
-      ...snapshot,
-      time_in: toDbUtc(now),
-      ...metricsFor(snapshot, now, null),
-      source: 'self',
-      recorded_by_user_id: req.user.id,
-    }]);
-
-    const [[row]] = await pool.query(`${LOG_SELECT} WHERE l.id = ?`, [result.insertId]);
-    res.status(201).json(serializeLog(row));
+    res.status(201).json(await stampIn(employee.id, { source: 'self', userId: req.user.id }));
   } catch (err) {
-    if (err.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'You already have a time record for this work day. Ask HR to correct it if it is wrong.' });
-    }
     next(err);
   }
 });
@@ -161,22 +65,7 @@ router.post('/me/time-in', requireAuth, async (req, res, next) => {
 router.post('/me/time-out', requireAuth, async (req, res, next) => {
   try {
     const employee = await requireEmployee(req);
-    const now = new Date();
-
-    const open = await openLog(employee.id, now);
-    if (!open) {
-      return res.status(409).json({ error: `You have no time-in from the last ${MAX_OPEN_HOURS} hours to time out of. Ask HR to correct an older record.` });
-    }
-
-    const remarks = req.body?.remarks ? String(req.body.remarks).trim().slice(0, 255) : open.remarks;
-    await pool.query(
-      // time_out IS NULL guards a double-tapped Time Out: the second one changes nothing.
-      'UPDATE attendance_logs SET ?, time_out = ?, remarks = ? WHERE id = ? AND time_out IS NULL',
-      [metricsFor(open, fromDbUtc(open.time_in), now), toDbUtc(now), remarks, open.id]
-    );
-
-    const [[row]] = await pool.query(`${LOG_SELECT} WHERE l.id = ?`, [open.id]);
-    res.json(serializeLog(row));
+    res.json(await stampOut(employee.id, { remarks: req.body?.remarks }));
   } catch (err) {
     next(err);
   }

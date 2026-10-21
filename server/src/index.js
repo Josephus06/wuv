@@ -74,6 +74,8 @@ const attendanceRoutes = require('./routes/attendance');
 const payrollRoutes = require('./routes/payroll');
 const payrollSetupRoutes = require('./routes/payrollSetup');
 const scheduleRoutes = require('./routes/schedule');
+const kioskRoutes = require('./routes/kiosk');
+const kioskAdminRoutes = require('./routes/kioskAdmin');
 const { ensureAssignedAtColumn } = require('./db/ensureSchema');
 const { ensureDatabaseReady } = require('./db/autoBootstrap');
 const { sendTicketReminders } = require('./scripts/ticket_reminder');
@@ -160,6 +162,9 @@ app.use('/api/attendance', attendanceRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/payroll-setup', payrollSetupRoutes);
 app.use('/api/schedule', scheduleRoutes);
+// The branch time clock: no login, a registered device's link + an employee PIN instead.
+app.use('/api/kiosk', kioskRoutes);
+app.use('/api/kiosk-admin', kioskAdminRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

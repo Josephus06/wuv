@@ -93,6 +93,7 @@ export default function EmployeeProfileModal({ employeeId, isHr, departments, co
   const [form, setForm] = useState(BLANK);
   const [meta, setMeta] = useState(null); // created / updated / by
   const [pay, setPay] = useState(null);
+  const [pinSet, setPinSet] = useState(false);
   const [options, setOptions] = useState({});
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
@@ -106,6 +107,7 @@ export default function EmployeeProfileModal({ employeeId, isHr, departments, co
       setForm(fromRow(data));
       setMeta({ created_at: data.created_at, updated_at: data.updated_at, updated_by: data.updated_by_name });
       setPay(data.pay || null);
+      setPinSet(!!data.kiosk_pin_set);
       setLoading(false);
     }).catch((e) => { setError(e.response?.data?.error || 'Could not load this employee.'); setLoading(false); });
   }, [employeeId, isNew, isHr]);
@@ -345,6 +347,7 @@ export default function EmployeeProfileModal({ employeeId, isHr, departments, co
                     </label>
                   </div>
                   <PayRate employeeId={employeeId} pay={pay} onChange={setPay} />
+                  <TimeClockPin employeeId={employeeId} isSet={pinSet} onChange={setPinSet} />
                 </>
               )}
 
@@ -452,6 +455,64 @@ function PayRate({ employeeId, pay, onChange }) {
               </tbody>
             </table>
           )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// The branch time clock PIN. Only a hash is stored, so a PIN can be seen exactly once: right
+// after it is made. A lost PIN is replaced, which also retires the old one.
+function TimeClockPin({ employeeId, isSet, onChange }) {
+  const [pin, setPin] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function generate() {
+    if (isSet && !confirm("Replace this employee’s time clock PIN? The old PIN stops working.")) return;
+    setBusy(true); setErr('');
+    try {
+      const { data } = await api.post(`/kiosk-admin/pins/${employeeId}`);
+      setPin(data.pin);
+      onChange(true);
+    } catch (e) { setErr(e.response?.data?.error || 'Could not make a PIN.'); }
+    setBusy(false);
+  }
+
+  async function remove() {
+    if (!confirm("Remove this employee’s PIN? They will not be able to use the time clock until they get a new one.")) return;
+    setBusy(true); setErr('');
+    try {
+      await api.delete(`/kiosk-admin/pins/${employeeId}`);
+      setPin('');
+      onChange(false);
+    } catch (e) { setErr(e.response?.data?.error || 'Could not remove the PIN.'); }
+    setBusy(false);
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 14, background: 'var(--panel-2, transparent)' }}>
+      <h4 style={{ margin: '0 0 6px' }}>Time Clock PIN</h4>
+      {!employeeId ? (
+        <div className="muted" style={{ fontSize: 13 }}>Save the employee first, then give them a PIN here.</div>
+      ) : (
+        <>
+          {pin ? (
+            <div style={{ marginBottom: 8 }}>
+              <div className="pin-reveal">{pin}</div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Give this to the employee privately now — it will not be shown again.</div>
+            </div>
+          ) : (
+            <div style={{ marginBottom: 8 }}>
+              {isSet ? <span className="badge badge-success">PIN set</span> : <span className="badge badge-muted">No PIN</span>}
+              <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>Used on the branch time clock to time in and out without logging in.</span>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={generate}>{isSet ? 'New PIN' : 'Give PIN'}</button>
+            {isSet && <button type="button" className="btn btn-sm" disabled={busy} onClick={remove}>Remove PIN</button>}
+          </div>
+          {err && <div className="error-banner" style={{ marginTop: 8 }}>{err}</div>}
         </>
       )}
     </div>

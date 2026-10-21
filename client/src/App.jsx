@@ -132,6 +132,8 @@ import ShiftAssignments from './pages/ShiftAssignments';
 import Shifts from './pages/Shifts';
 import Schedule from './pages/Schedule';
 import DtrPrint from './pages/DtrPrint';
+import Kiosk from './pages/Kiosk';
+import KioskDevices from './pages/KioskDevices';
 import Payroll from './pages/Payroll';
 import PayrollRunView from './pages/PayrollRunView';
 import PayrollPayItems from './pages/PayrollPayItems';
@@ -167,6 +169,9 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      {/* The branch time clock: deliberately NOT behind ProtectedRoute -- no login. The secret
+          device link in the URL and each employee's PIN are checked by the API instead. */}
+      <Route path="/clock/:token" element={<Kiosk />} />
       {/* Standalone printable certificate -- protected but rendered without the app chrome. */}
       <Route path="/warranty-certificates/:id/print" element={<ProtectedRoute><WarrantyCertificatePrint /></ProtectedRoute>} />
       {/* Daily Time Records, one sheet per employee per page -- also without the app chrome. */}
@@ -339,6 +344,7 @@ function App() {
         <Route path="/shift-assignments" element={<ShiftAssignments />} />
         <Route path="/shifts" element={<Shifts />} />
         <Route path="/schedule" element={<Schedule />} />
+        <Route path="/kiosk-devices" element={<KioskDevices />} />
         <Route path="/payroll" element={<Payroll />} />
         <Route path="/payroll/:id" element={<PayrollRunView />} />
         <Route path="/payroll-pay-items" element={<PayrollPayItems />} />

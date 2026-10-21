@@ -50,6 +50,7 @@ const NAV_STRUCTURE = [
           { route: '/schedule', label: 'Schedule' },
           { route: '/shift-assignments', label: 'Shift Assignments' },
           { route: '/shifts', label: 'Shifts' },
+          { route: '/kiosk-devices', label: 'Time Clock Devices' },
         ],
       },
       {

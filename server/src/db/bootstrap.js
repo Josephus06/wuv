@@ -93,6 +93,7 @@ const STEPS = [
   ['create-attendance.js', 'shifts, shift assignments and attendance'],
   ['create-companies.js', 'companies, and the company of each branch and employee'],
   ['add-schedules.js', 'plotted weekly schedules, paid breaks and branch shifts'],
+  ['add-kiosk.js', 'branch time clock devices and employee PINs'],
   ['add-employee-profile.js', 'employee profile (personal, employment, other info) and dated pay rates'],
   ['create-payroll.js', 'payroll: rule sets, holidays, allowances, loans and semi-monthly runs'],
 

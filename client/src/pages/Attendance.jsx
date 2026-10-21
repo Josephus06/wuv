@@ -206,6 +206,7 @@ export default function Attendance() {
         <>
           <span className={`badge ${statusBadgeClass(r.status)}`}>{r.status}</span>
           {r.source === 'manual' && <div className="muted" style={{ fontSize: 11 }}>entered by HR</div>}
+          {r.source === 'kiosk' && <div className="muted" style={{ fontSize: 11 }}>via time clock</div>}
           {r.source === 'self' && r.edited && <div className="muted" style={{ fontSize: 11 }}>corrected</div>}
           {r.remarks && <div className="muted" style={{ fontSize: 11 }} title={r.remarks}>{r.remarks}</div>}
         </>
