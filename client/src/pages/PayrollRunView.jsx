@@ -4,21 +4,13 @@ import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { csvDownload, formatDate, formatPeriod, peso } from '../utils/payroll';
+import { csvDownload, formatDate, formatPeriod, peso, qtyLabel } from '../utils/payroll';
 
 const LINE_GROUPS = [
   ['earning', 'Earnings'],
   ['deduction', 'Deductions'],
   ['employer', 'Employer share (not deducted)'],
 ];
-
-function qtyLabel(l) {
-  if (l.quantity === null || l.quantity === undefined) return '';
-  const q = Number(l.quantity);
-  if (l.unit === 'bal') return `balance after: ${peso(q)}`;
-  const unit = { day: q === 1 ? 'day' : 'days', hr: 'hr', min: 'min' }[l.unit] || '';
-  return `${q % 1 ? q.toFixed(2) : q} ${unit}`.trim();
-}
 
 export default function PayrollRunView() {
   const { id } = useParams();
@@ -108,6 +100,7 @@ export default function PayrollRunView() {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button className="btn" onClick={() => navigate('/payroll')}>Back</button>
+          {run.employees.length > 0 && <button className="btn" onClick={() => window.open(`/payroll/${run.id}/payslips/print`, '_blank')}>Print Payslips</button>}
           {run.employees.length > 0 && <button className="btn" onClick={exportCsv}>Export CSV</button>}
           {draft && can('/payroll', 'can_edit') && <button className="btn" disabled={!!busy} onClick={() => action('recompute')}>{busy === 'recompute' ? 'Computing…' : 'Recompute'}</button>}
           {draft && can('/payroll', 'can_delete') && <button className="btn btn-danger" disabled={!!busy} onClick={() => action('delete')}>Delete</button>}
@@ -254,6 +247,11 @@ function PayslipModal({ runId, employeeId, editable, adjustments, onClose, onCha
       {error && <div className="error-banner">{error}</div>}
       {!slip ? <LoadingSpinner /> : (
         <>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+            <button type="button" className="btn btn-sm" onClick={() => window.open(`/payroll/${runId}/payslips/print?employee_id=${employeeId}`, '_blank')}>
+              Print Payslip
+            </button>
+          </div>
           <div className="muted" style={{ marginBottom: 12 }}>
             {[slip.employee_code, slip.position_title, slip.branch_name].filter(Boolean).join(' · ')}
             {' · '}{slip.pay_type === 'daily' ? `Daily ${peso(slip.base_rate)}` : `Monthly ${peso(slip.base_rate)}`}

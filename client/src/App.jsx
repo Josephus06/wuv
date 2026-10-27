@@ -132,6 +132,7 @@ import ShiftAssignments from './pages/ShiftAssignments';
 import Shifts from './pages/Shifts';
 import Schedule from './pages/Schedule';
 import DtrPrint from './pages/DtrPrint';
+import PayslipPrint from './pages/PayslipPrint';
 import Kiosk from './pages/Kiosk';
 import KioskDevices from './pages/KioskDevices';
 import AttendanceImport from './pages/AttendanceImport';
@@ -177,6 +178,7 @@ function App() {
       <Route path="/warranty-certificates/:id/print" element={<ProtectedRoute><WarrantyCertificatePrint /></ProtectedRoute>} />
       {/* Daily Time Records, one sheet per employee per page -- also without the app chrome. */}
       <Route path="/attendance/dtr/print" element={<ProtectedRoute><DtrPrint /></ProtectedRoute>} />
+      <Route path="/payroll/:id/payslips/print" element={<ProtectedRoute><PayslipPrint /></ProtectedRoute>} />
       <Route
         element={
           <ProtectedRoute>

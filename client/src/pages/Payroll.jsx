@@ -5,7 +5,7 @@ import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { formatDate, formatPeriod, peso } from '../utils/payroll';
+import { formatDate, formatPeriod, peso, standardPeriod } from '../utils/payroll';
 
 // The cutoff that most likely needs running now: the one that just ended.
 function suggestedCutoff() {
@@ -21,7 +21,8 @@ function suggestedCutoff() {
   } else {
     cutoff = 1;
   }
-  return { month: `${year}-${String(month).padStart(2, '0')}`, cutoff };
+  const m = `${year}-${String(month).padStart(2, '0')}`;
+  return { month: m, cutoff, ...standardPeriod(m, cutoff) };
 }
 
 export default function Payroll() {
@@ -61,6 +62,7 @@ export default function Payroll() {
     try {
       const { data } = await api.post('/payroll', {
         company_id: creating.company_id, year, month, cutoff: creating.cutoff,
+        period_start: creating.period_start, period_end: creating.period_end,
         pay_date: creating.pay_date || undefined, notes: creating.notes,
       });
       navigate(`/payroll/${data.id}`);
@@ -68,6 +70,13 @@ export default function Payroll() {
       setError(err.response?.data?.error || 'Could not create the payroll');
       setBusy(false);
     }
+  }
+
+  // A new month or cutoff resets the dates to its standard 1st–15th / 16th–end.
+  function setCutoff(changes) {
+    const next = { ...creating, ...changes };
+    if (next.month) Object.assign(next, standardPeriod(next.month, next.cutoff));
+    setCreating(next);
   }
 
   function setFilter(k, v) {
@@ -150,16 +159,30 @@ export default function Payroll() {
             <div className="field-row">
               <div className="field">
                 <label>Month</label>
-                <input type="month" required value={creating.month} onChange={(e) => setCreating({ ...creating, month: e.target.value })} />
+                <input type="month" required value={creating.month} onChange={(e) => setCutoff({ month: e.target.value })} />
               </div>
               <div className="field">
                 <label>Cutoff</label>
-                <select value={creating.cutoff} onChange={(e) => setCreating({ ...creating, cutoff: Number(e.target.value) })}>
+                <select value={creating.cutoff} onChange={(e) => setCutoff({ cutoff: Number(e.target.value) })}>
                   <option value={1}>1st – 15th</option>
                   <option value={2}>16th – end of month</option>
                 </select>
               </div>
             </div>
+            <div className="field-row">
+              <div className="field">
+                <label>From</label>
+                <input type="date" required value={creating.period_start} onChange={(e) => setCreating({ ...creating, period_start: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>To</label>
+                <input type="date" required min={creating.period_start} value={creating.period_end} onChange={(e) => setCreating({ ...creating, period_end: e.target.value })} />
+              </div>
+            </div>
+            <p className="muted" style={{ marginTop: -4 }}>
+              Attendance from these dates is paid. Change them if this company&apos;s cutoff runs on other dates, e.g. the
+              12th–26th. The cutoff above decides which half of the month&apos;s SSS, PhilHealth, Pag-IBIG and tax is deducted.
+            </p>
             <div className="field-row">
               <div className="field">
                 <label>Pay Date (optional)</label>

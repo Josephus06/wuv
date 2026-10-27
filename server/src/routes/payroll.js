@@ -60,7 +60,24 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
     if (!companyId) return res.status(400).json({ error: 'Choose the company' });
     if (!(year >= 2000 && year <= 2100) || !(month >= 1 && month <= 12)) return res.status(400).json({ error: 'Choose the month' });
     if (![1, 2].includes(cutoff)) return res.status(400).json({ error: 'Choose the cutoff: 1st–15th or 16th–end' });
-    const { start, end } = periodFor(year, month, cutoff);
+    // The dates default to the 1st–15th / 16th–end, and can be moved for a company whose cutoff
+    // runs on other dates (e.g. the 12th–26th). The cutoff still says which half of the month's
+    // contributions and tax the run carries.
+    let { start, end } = periodFor(year, month, cutoff);
+    if (req.body.period_start || req.body.period_end) {
+      start = req.body.period_start;
+      end = req.body.period_end;
+      if (!isIsoDate(start) || !isIsoDate(end)) return res.status(400).json({ error: 'Enter the cutoff\'s From and To dates' });
+      if (start > end) return res.status(400).json({ error: 'The cutoff\'s From date is after its To date' });
+      const days = (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000 + 1;
+      if (days > 31) return res.status(400).json({ error: 'A cutoff can be at most 31 days' });
+    }
+    const [[overlap]] = await pool.query(
+      `SELECT DATE_FORMAT(period_start, '%Y-%m-%d') AS s, DATE_FORMAT(period_end, '%Y-%m-%d') AS e
+       FROM payroll_runs WHERE company_id = ? AND period_start <= ? AND period_end >= ? LIMIT 1`,
+      [companyId, end, start]
+    );
+    if (overlap) throw conflict(`This company already has a payroll for ${overlap.s} to ${overlap.e}, which overlaps these dates.`);
     const payDate = req.body.pay_date || end;
     if (!isIsoDate(payDate)) return res.status(400).json({ error: 'Pay date must be a valid date' });
 
@@ -138,6 +155,39 @@ router.get('/:id/employees/:employeeId', requireAuth, requirePermission(ROUTE, '
       [pe.id]
     );
     res.json({ ...pe, warnings: parseJson(pe.warnings), lines });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Printable payslips: the run's header and every payslip with its lines, or one employee's
+// (?employee_id=). Read from what is stored, so a reprint says what the run said.
+router.get('/:id/payslips', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
+  try {
+    const [[run]] = await pool.query(`${RUN_SELECT} WHERE r.id = ?`, [req.params.id]);
+    if (!run) return res.status(404).json({ error: 'Not found' });
+    const params = [run.id];
+    let only = '';
+    if (req.query.employee_id) { only = 'AND pe.employee_id = ?'; params.push(req.query.employee_id); }
+    const [slips] = await pool.query(
+      `SELECT pe.*, e.employee_code, CONCAT(e.first_name, ' ', e.last_name) AS employee_name, e.position_title,
+              l.location_name AS branch_name, d.name AS department_name
+       FROM payroll_run_employees pe
+       JOIN employees e ON e.id = pe.employee_id
+       LEFT JOIN locations l ON l.id = e.branch_id
+       LEFT JOIN departments d ON d.id = e.department_id
+       WHERE pe.run_id = ? ${only} ORDER BY l.location_name, e.last_name, e.first_name`,
+      params
+    );
+    const [lines] = slips.length ? await pool.query(
+      `SELECT run_employee_id, line_type, code, label, quantity, unit, rate, amount, is_taxable
+       FROM payroll_run_lines WHERE run_employee_id IN (?) ORDER BY run_employee_id, sort_order`,
+      [slips.map((s) => s.id)]
+    ) : [[]];
+    res.json({
+      run: { ...run, warnings: undefined },
+      slips: slips.map((s) => ({ ...s, warnings: undefined, lines: lines.filter((l) => l.run_employee_id === s.id) })),
+    });
   } catch (err) {
     next(err);
   }

@@ -2088,3 +2088,47 @@ tr.clickable:hover td { background: var(--accent-bg); }
 .import-table .badge { margin: 1px 0; white-space: normal; }
 .nowrap { white-space: nowrap; }
 .select-missing { border-color: var(--danger); }
+
+/* ---- Payslip print ---- */
+/* Paper colours like the DTR; two slips to an A4 page, a dashed cut line between them. */
+.slip {
+  position: relative; overflow: hidden;
+  background: #fff; color: #222; max-width: 820px; margin: 0 auto 20px;
+  padding: 22px 28px; border-radius: 6px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+  font-size: 11px; line-height: 1.35;
+}
+.slip-draft {
+  position: absolute; top: 42%; left: 50%; transform: translate(-50%, -50%) rotate(-18deg);
+  font-size: 90px; font-weight: 900; letter-spacing: 0.2em; color: rgba(185, 28, 28, 0.1); pointer-events: none;
+}
+.slip-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; border-bottom: 2px solid #333; padding-bottom: 6px; margin-bottom: 8px; }
+.slip-company { font-size: 15px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.02em; color: #111; }
+.slip-title { font-size: 12px; font-weight: 700; letter-spacing: 0.2em; color: #444; }
+.slip-period { text-align: right; font-size: 11px; }
+.slip-period span { color: #666; margin-right: 4px; }
+.slip-info { display: grid; grid-template-columns: max-content 1fr max-content 1fr; gap: 3px 10px; margin: 0 0 10px; }
+.slip-info dt { font-weight: 700; color: #333; }
+.slip-info dd { margin: 0; border-bottom: 1px solid #ccc; min-height: 15px; }
+.slip-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.slip-lines { width: 100%; border-collapse: collapse; }
+.slip-lines th, .slip-lines td { padding: 2px 4px; text-align: left; color: #222; background: #fff; font-size: 10.5px; }
+.slip-lines thead th { border-bottom: 1px solid #555; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+.slip-lines tfoot th { border-top: 1px solid #555; font-weight: 700; }
+.slip-lines .num { text-align: right; white-space: nowrap; }
+.slip-qty { color: #666; white-space: nowrap; font-size: 9.5px; }
+.slip-none { color: #888; font-style: italic; }
+.slip-net { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding: 6px 10px; border: 2px solid #333; font-size: 12px; font-weight: 700; }
+.slip-net strong { font-size: 15px; }
+.slip-sign { display: flex; gap: 28px; margin-top: 28px; text-align: center; }
+.slip-sign > div { flex: 1; border-top: 1px solid #555; padding-top: 3px; font-size: 10px; color: #333; }
+@media (max-width: 600px) {
+  .slip-cols { grid-template-columns: 1fr; }
+  .slip-info { grid-template-columns: max-content 1fr; }
+}
+
+@media print {
+  .slip { box-shadow: none; border-radius: 0; max-width: none; margin: 0; padding: 4mm 2mm; break-inside: avoid; }
+  .slip:nth-of-type(2n) { border-top: 1px dashed #888; margin-top: 4mm; padding-top: 8mm; }
+  .slip:nth-of-type(2n):not(:last-of-type) { break-after: page; }
+  .slip-draft { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
