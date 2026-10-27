@@ -255,6 +255,20 @@ router.post('/:id/pay-rate', requireAuth, requirePermission(ROUTE, 'can_edit'), 
   }
 });
 
+// Removes a rate entered by mistake. Approved payrolls keep what they paid (their lines are
+// stored); a draft picks up the change when it is recomputed.
+router.delete('/:id/pay-rate/:rateId', requireAuth, requirePermission(ROUTE, 'can_delete'), async (req, res, next) => {
+  try {
+    const [result] = await pool.query(
+      'DELETE FROM employee_compensation WHERE id = ? AND employee_id = ?', [req.params.rateId, req.params.id]
+    );
+    if (!result.affectedRows) return res.status(404).json({ error: 'Not found' });
+    res.json(await currentPay(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.delete('/:id', requireAuth, requirePermission(ROUTE, 'can_delete'), async (req, res, next) => {
   try {
     await pool.query('DELETE FROM employees WHERE id = ?', [req.params.id]);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../api/client';
+import { useAuth } from '../context/useAuth';
 import Modal from './Modal';
 import LoadingSpinner from './LoadingSpinner';
 import { parseUtc } from '../utils/datetime';
@@ -397,6 +398,8 @@ export default function EmployeeProfileModal({ employeeId, isHr, departments, co
 
 // Pay Rate and Pay Type, as dated entries. Saved on its own (not with the form's Save).
 function PayRate({ employeeId, pay, onChange }) {
+  const { can } = useAuth();
+  const canDelete = can('/employees', 'can_delete');
   const [entry, setEntry] = useState({ effective_date: new Date().toISOString().slice(0, 10), pay_type: '', base_rate: '', remarks: '' });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -410,6 +413,17 @@ function PayRate({ employeeId, pay, onChange }) {
       onChange(data);
       setEntry((e) => ({ ...e, base_rate: '', remarks: '' }));
     } catch (e) { setErr(e.response?.data?.error || 'Could not save the pay rate.'); }
+    setBusy(false);
+  }
+
+  async function remove(h) {
+    const what = `${money(h.base_rate)} ${h.pay_type === 'daily' ? 'a day' : 'a month'} from ${String(h.effective_date).slice(0, 10)}`;
+    if (!confirm(`Delete the rate ${what}? Approved payrolls keep what they paid; a draft payroll changes when it is recomputed.`)) return;
+    setBusy(true); setErr('');
+    try {
+      const { data } = await api.delete(`/employees/${employeeId}/pay-rate/${h.id}`);
+      onChange(data);
+    } catch (e) { setErr(e.response?.data?.error || 'Could not delete the pay rate.'); }
     setBusy(false);
   }
 
@@ -441,7 +455,7 @@ function PayRate({ employeeId, pay, onChange }) {
           <div className="muted" style={{ fontSize: 12 }}>A new rate is added from its date; earlier rates stay as they were, so past payroll keeps the rate it used.</div>
           {(pay?.history || []).length > 0 && (
             <table style={{ marginTop: 8 }}>
-              <thead><tr><th>Effective</th><th>Pay Type</th><th style={{ textAlign: 'right' }}>Rate</th><th>Remarks</th><th>Entered By</th></tr></thead>
+              <thead><tr><th>Effective</th><th>Pay Type</th><th style={{ textAlign: 'right' }}>Rate</th><th>Remarks</th><th>Entered By</th>{canDelete && <th />}</tr></thead>
               <tbody>
                 {pay.history.map((h) => (
                   <tr key={h.id}>
@@ -450,6 +464,11 @@ function PayRate({ employeeId, pay, onChange }) {
                     <td style={{ textAlign: 'right' }}>{money(h.base_rate)}</td>
                     <td>{h.remarks || ''}</td>
                     <td>{h.created_by || ''}</td>
+                    {canDelete && (
+                      <td style={{ textAlign: 'right' }}>
+                        <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => remove(h)}>Delete</button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
