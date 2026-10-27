@@ -88,13 +88,17 @@ export default function Attendance() {
       time_in: toInputValue(row?.scheduled_start_local),
       time_out: toInputValue(row?.scheduled_end_local),
       remarks: '',
+      approved_ot_hours: '',
     });
     setEditing({ mode: 'new', row });
     setError('');
   }
 
   function openEdit(row) {
-    setForm({ time_in: toInputValue(row.time_in_local), time_out: toInputValue(row.time_out_local), remarks: row.remarks || '' });
+    setForm({
+      time_in: toInputValue(row.time_in_local), time_out: toInputValue(row.time_out_local), remarks: row.remarks || '',
+      approved_ot_hours: row.approved_ot_minutes === null || row.approved_ot_minutes === undefined ? '' : String(row.approved_ot_minutes / 60),
+    });
     setEditing({ mode: 'edit', row });
     setError('');
   }
@@ -197,7 +201,7 @@ export default function Attendance() {
     },
     { key: 'late_minutes', label: 'Late', render: (r) => formatMinutes(r.late_minutes) },
     { key: 'undertime_minutes', label: 'Undertime', render: (r) => formatMinutes(r.undertime_minutes) },
-    { key: 'overtime_minutes', label: 'Overtime', render: (r) => formatMinutes(r.overtime_minutes) },
+    { key: 'overtime_minutes', label: 'Overtime', render: (r) => <>{formatMinutes(r.overtime_minutes)}{r.approved_ot_minutes !== null && r.approved_ot_minutes !== undefined && r.log_id && <div className="muted" style={{ fontSize: 11 }}>approved</div>}</> },
     { key: 'worked_minutes', label: 'Worked', render: (r) => formatMinutes(r.worked_minutes) },
     {
       key: 'status',
@@ -207,6 +211,7 @@ export default function Attendance() {
           <span className={`badge ${statusBadgeClass(r.status)}`}>{r.status}</span>
           {r.source === 'manual' && <div className="muted" style={{ fontSize: 11 }}>entered by HR</div>}
           {r.source === 'kiosk' && <div className="muted" style={{ fontSize: 11 }}>via time clock</div>}
+          {r.source === 'import' && <div className="muted" style={{ fontSize: 11 }}>imported</div>}
           {r.source === 'self' && r.edited && <div className="muted" style={{ fontSize: 11 }}>corrected</div>}
           {r.remarks && <div className="muted" style={{ fontSize: 11 }} title={r.remarks}>{r.remarks}</div>}
         </>
@@ -219,6 +224,7 @@ export default function Attendance() {
       <div className="page-header">
         <h1>Attendance</h1>
         <div style={{ display: 'flex', gap: 8 }}>
+          {can('/attendance', 'can_add') && <button className="btn" onClick={() => window.location.assign('/attendance/import')}>Import</button>}
           <button className="btn" onClick={openDtr}>Print DTR</button>
           {rows.length > 0 && <button className="btn" onClick={exportCsv}>Export CSV</button>}
           {can('/attendance', 'can_add') && <button className="btn btn-primary" onClick={() => openAdd(null)}>Add Record</button>}
@@ -413,6 +419,14 @@ export default function Attendance() {
               <div className="field">
                 <label>Time Out</label>
                 <input type="datetime-local" value={form.time_out} onChange={(e) => setForm({ ...form, time_out: e.target.value })} />
+              </div>
+            </div>
+            <div className="field">
+              <label>Approved Overtime (hours)</label>
+              <input type="number" min="0" max="16" step="0.25" value={form.approved_ot_hours}
+                onChange={(e) => setForm({ ...form, approved_ot_hours: e.target.value })} placeholder="Blank = overtime after the shift end" />
+              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                When set, payroll pays exactly this much overtime for the day (0 = none approved).
               </div>
             </div>
             <div className="field">

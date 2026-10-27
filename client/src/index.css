@@ -2075,3 +2075,16 @@ tr.clickable:hover td { background: var(--accent-bg); }
 .kiosk-link-box input { font-family: monospace; font-size: 12px; }
 .kiosk-pin { font-family: monospace; font-size: 15px; letter-spacing: 2px; font-weight: 700; color: var(--text-h); }
 .pin-reveal { font-family: monospace; font-size: 26px; letter-spacing: 6px; font-weight: 800; color: var(--text-h); background: var(--accent-bg); border-radius: 8px; padding: 6px 14px; display: inline-block; }
+
+/* ---- Attendance import review ---- */
+.import-table td, .import-table th { padding: 4px 6px; vertical-align: top; }
+.import-table input[type="time"] { width: 110px; padding: 3px 6px; }
+.import-table input[type="number"] { width: 80px; padding: 3px 6px; }
+.import-table input[type="checkbox"] { width: auto; }
+.import-table .import-group th { background: var(--bg); color: var(--text-h); text-align: left; font-size: 13px; padding: 8px 6px; }
+.import-table tr.is-error td { background: var(--danger-bg); }
+.import-table tr.is-warn td { background: var(--warning-bg); }
+.import-table tr.is-skipped td { opacity: 0.45; }
+.import-table .badge { margin: 1px 0; white-space: normal; }
+.nowrap { white-space: nowrap; }
+.select-missing { border-color: var(--danger); }

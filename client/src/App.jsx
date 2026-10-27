@@ -134,6 +134,7 @@ import Schedule from './pages/Schedule';
 import DtrPrint from './pages/DtrPrint';
 import Kiosk from './pages/Kiosk';
 import KioskDevices from './pages/KioskDevices';
+import AttendanceImport from './pages/AttendanceImport';
 import Payroll from './pages/Payroll';
 import PayrollRunView from './pages/PayrollRunView';
 import PayrollPayItems from './pages/PayrollPayItems';
@@ -341,6 +342,7 @@ function App() {
         <Route path="/commission-schemes/:id" element={<CommissionSchemeView />} />
         <Route path="/my-attendance" element={<MyAttendance />} />
         <Route path="/attendance" element={<Attendance />} />
+        <Route path="/attendance/import" element={<AttendanceImport />} />
         <Route path="/shift-assignments" element={<ShiftAssignments />} />
         <Route path="/shifts" element={<Shifts />} />
         <Route path="/schedule" element={<Schedule />} />

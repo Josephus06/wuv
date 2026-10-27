@@ -18,8 +18,9 @@
 //     scheduled day before it (the Labor Code's condition).
 //
 //   Overtime and night differential are paid unless the profile says Compute Overtime Pay =
-//   No (managerial staff). Overtime is the time after the scheduled end, counted in whole
-//   blocks (30 minutes by default); on an unscheduled day, whatever is past 8 hours.
+//   No (managerial staff). Overtime is the record's approved overtime when one is set, else
+//   the time after the scheduled end -- on an unscheduled day, whatever is past 8 hours --
+//   counted in whole blocks (30 minutes by default).
 //
 // WHAT IS NOT DONE HERE: a pay-rate change mid-cutoff (the rate in force on the last day is
 // used for the whole cutoff), leave (an absence is an absence until leave exists), and 13th
@@ -114,7 +115,8 @@ async function loadInputs(run, conn) {
 
   const [logs] = await conn.query(
     `SELECT id, employee_id, DATE_FORMAT(work_date, '%Y-%m-%d') AS work_date, scheduled_start, scheduled_end,
-            break_minutes, paid_break_minutes, time_in, time_out, late_minutes, undertime_minutes, overtime_minutes, worked_minutes
+            break_minutes, paid_break_minutes, time_in, time_out, late_minutes, undertime_minutes, overtime_minutes,
+            approved_ot_minutes, worked_minutes
      FROM attendance_logs WHERE employee_id IN (?) AND work_date BETWEEN ? AND ?`,
     [ids, lookback, end]
   );
@@ -251,6 +253,9 @@ function computeEmployee(emp, comp, ctx) {
         regMin = Math.min(log.worked_minutes, fullDayMin);
         otRaw = Math.max(0, log.worked_minutes - fullDayMin);
       }
+      // Overtime a supervisor approved for the day replaces the measured figure: it pays an
+      // approved early start, and not staying late that nobody approved.
+      if (log.approved_ot_minutes !== null && log.approved_ot_minutes !== undefined) otRaw = log.approved_ot_minutes;
 
       if (monthly) {
         // The basic pays a scheduled day once; only the part above that is added.

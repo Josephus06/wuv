@@ -1,15 +1,18 @@
 const express = require('express');
+const multer = require('multer');
 const pool = require('../db');
 const { requireAuth, requirePermission } = require('../middleware/auth');
 const {
   BUSINESS_TZ, MAX_OPEN_HOURS, HttpError,
-  toDbUtc, fromDbUtc, toLocalDisplay, addDays, todayLocal, isIsoDate, parseLocalDateTime,
+  toDbUtc, fromDbUtc, toLocalDisplay, addDays, todayLocal, isIsoDate, parseLocalDateTime, localToUtc,
   isOvernight, scheduleFor, scheduleSources, dayShift, scheduledShift, scheduleSnapshot, metricsFor,
-  employeeForUser,
+  remeasureDay, employeeForUser,
 } = require('../lib/attendance');
 const {
   LOG_SELECT, serializeLog, clockStatus, stampIn, stampOut,
 } = require('../lib/timeClock');
+const { readFirstSheet } = require('../lib/xlsx');
+const { parseAttendanceSheet, matchEmployee, matchShift } = require('../lib/attendanceImport');
 
 const router = express.Router();
 const ROUTE = '/attendance';
@@ -143,11 +146,12 @@ async function buildDtr(employeeIds, from, to) {
         totals.present += 1;
         totals.late_minutes += log.late_minutes;
         totals.undertime_minutes += log.undertime_minutes;
-        totals.overtime_minutes += log.overtime_minutes;
+        totals.overtime_minutes += log.approved_ot_minutes ?? log.overtime_minutes;
         totals.worked_minutes += log.worked_minutes;
         if (!schedule) remarks.push('Worked on rest day');
         if (!log.time_out) remarks.push(now - fromDbUtc(log.time_in) > MAX_OPEN_HOURS * 3600000 ? 'No time out' : 'On duty');
         if (log.source === 'manual') remarks.push('Entered by HR');
+        else if (log.source === 'import') remarks.push('Imported');
         else if (log.edited_at) remarks.push('Corrected by HR');
         if (log.remarks) remarks.push(log.remarks);
       } else if (!planned) {
@@ -165,7 +169,7 @@ async function buildDtr(employeeIds, from, to) {
         time_out_local: s ? s.time_out_local : null,
         late_minutes: log ? log.late_minutes : 0,
         undertime_minutes: log ? log.undertime_minutes : 0,
-        overtime_minutes: log ? log.overtime_minutes : 0,
+        overtime_minutes: log ? (log.approved_ot_minutes ?? log.overtime_minutes) : 0,
         worked_minutes: log ? log.worked_minutes : 0,
         remarks,
       };
@@ -285,7 +289,8 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
           time_out_local: s ? s.time_out_local : null,
           late_minutes: log ? log.late_minutes : 0,
           undertime_minutes: log ? log.undertime_minutes : 0,
-          overtime_minutes: log ? log.overtime_minutes : 0,
+          overtime_minutes: log ? (log.approved_ot_minutes ?? log.overtime_minutes) : 0,
+          approved_ot_minutes: log ? log.approved_ot_minutes ?? null : null,
           worked_minutes: log ? log.worked_minutes : 0,
           source: log ? log.source : null,
           remarks: log ? log.remarks : null,
@@ -334,6 +339,16 @@ function readRemarks(body) {
   return body.remarks ? String(body.remarks).trim().slice(0, 255) : null;
 }
 
+// Approved overtime in hours from the form: blank = none decided (overtime is measured from
+// the shift end); 0 = none approved. Absent from the body = leave as it is.
+function readApprovedOt(body) {
+  if (!('approved_ot_hours' in body)) return undefined;
+  if (body.approved_ot_hours === '' || body.approved_ot_hours === null) return null;
+  const h = Number(body.approved_ot_hours);
+  if (!Number.isFinite(h) || h < 0 || h > 16) throw new HttpError(400, 'Approved overtime must be 0 to 16 hours');
+  return Math.round(h * 60);
+}
+
 // A record HR enters for someone who could not stamp (forgot, no device, field work).
 router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, res, next) => {
   try {
@@ -342,6 +357,7 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
     if (!employeeId) return res.status(400).json({ error: 'Choose an employee' });
     if (!isIsoDate(workDate)) return res.status(400).json({ error: 'Work date must be a valid date' });
     const { timeIn, timeOut } = readTimes(req.body, workDate);
+    const approvedOt = readApprovedOt(req.body);
 
     const [[emp]] = await pool.query('SELECT id FROM employees WHERE id = ?', [employeeId]);
     if (!emp) return res.status(400).json({ error: 'Employee not found' });
@@ -357,6 +373,7 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
       source: 'manual',
       remarks: readRemarks(req.body),
       recorded_by_user_id: req.user.id,
+      ...(approvedOt !== undefined ? { approved_ot_minutes: approvedOt } : {}),
     }]);
     const [[row]] = await pool.query(`${LOG_SELECT} WHERE l.id = ?`, [result.insertId]);
     res.status(201).json(serializeLog(row));
@@ -374,6 +391,7 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
     const [[log]] = await pool.query(`${LOG_SELECT} WHERE l.id = ?`, [req.params.id]);
     if (!log) return res.status(404).json({ error: 'Not found' });
     const { timeIn, timeOut } = readTimes(req.body, log.work_date);
+    const approvedOt = readApprovedOt(req.body);
 
     const snapshot = log.scheduled_start
       ? log
@@ -392,6 +410,7 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
       time_out: timeOut ? toDbUtc(timeOut) : null,
       ...metricsFor(snapshot, timeIn, timeOut),
       remarks: readRemarks(req.body),
+      ...(approvedOt !== undefined ? { approved_ot_minutes: approvedOt } : {}),
       ...(keepOriginal ? { original_time_in: log.time_in, original_time_out: log.time_out } : {}),
       edited_by_user_id: req.user.id,
       edited_at: toDbUtc(new Date()),
@@ -401,6 +420,158 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
     res.json(serializeLog(row));
   } catch (err) {
     next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------------------
+// Import: a branch's manual attendance sheet (.xlsx). Preview first -- nothing is saved --
+// so HR matches names and shifts and fixes flagged days; then import the reviewed rows.
+// ---------------------------------------------------------------------------------------
+
+const sheetUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
+
+router.post('/import/preview', requireAuth, requirePermission(ROUTE, 'can_add'), sheetUpload.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Attach the attendance sheet (.xlsx).' });
+    const rows = parseAttendanceSheet(readFirstSheet(req.file.buffer));
+    if (!rows.length) return res.status(400).json({ error: 'No attendance rows found under the headings.' });
+
+    const [employees] = await pool.query(
+      `SELECT e.id, e.employee_code, e.first_name, e.last_name, CONCAT(e.first_name, ' ', e.last_name) AS name,
+              c.name AS company_name, l.location_name AS branch_name
+       FROM employees e LEFT JOIN companies c ON c.id = e.company_id LEFT JOIN locations l ON l.id = e.branch_id
+       WHERE e.is_active = TRUE ORDER BY e.first_name, e.last_name`
+    );
+    const [shifts] = await pool.query('SELECT id, name, start_time, end_time FROM shifts WHERE is_active = TRUE ORDER BY name');
+
+    const sheetNames = [...new Set(rows.map((r) => r.sheet_name))];
+    const nameMatches = sheetNames.map((n) => ({ sheet_name: n, ...matchEmployee(n, employees) }));
+    const sheetShifts = [...new Set(rows.filter((r) => r.sheet_shift && !r.rest).map((r) => r.sheet_shift))];
+    const shiftMatches = sheetShifts.map((s) => ({ sheet_shift: s, shift_id: matchShift(s, shifts) }));
+
+    // Days that already have a time record, for the matched employees.
+    const dates = rows.map((r) => r.date).sort();
+    const matchedIds = nameMatches.map((m) => m.employee_id).filter(Boolean);
+    const [existing] = matchedIds.length
+      ? await pool.query(
+        `SELECT employee_id, DATE_FORMAT(work_date, '%Y-%m-%d') AS work_date, source FROM attendance_logs
+         WHERE employee_id IN (?) AND work_date BETWEEN ? AND ?`,
+        [matchedIds, dates[0], dates[dates.length - 1]]
+      )
+      : [[]];
+
+    res.json({
+      file_name: req.file.originalname,
+      from: dates[0],
+      to: dates[dates.length - 1],
+      rows,
+      employees: nameMatches,
+      shifts: shiftMatches,
+      existing: existing.map((e) => `${e.employee_id}|${e.work_date}`),
+      employee_options: employees.map(({ id, employee_code, name, company_name, branch_name }) => ({ id, employee_code, name, company_name, branch_name })),
+      shift_options: shifts,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Saves the reviewed rows in one transaction, all or nothing. For each included day of a
+// mapped employee: the sheet's shift (or rest day) is plotted on the schedule, then the time
+// record is created against it -- late / undertime measured from that shift, overtime as
+// approved on the sheet. An existing record for the day is kept unless replace_existing.
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+router.post('/import', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, res, next) => {
+  const { rows = [], employees = {}, shifts = {}, replace_existing: replace = false } = req.body || {};
+  const fileName = String(req.body?.file_name || 'attendance sheet').slice(0, 120);
+  if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'Nothing to import' });
+  if (rows.length > 3000) return res.status(400).json({ error: 'Too many rows -- import one cutoff at a time' });
+
+  const conn = await pool.getConnection();
+  const summary = { records: 0, replaced: 0, kept_existing: 0, plotted: 0, skipped: 0 };
+  try {
+    await conn.beginTransaction();
+    const empIds = [...new Set(Object.values(employees).map(Number).filter(Boolean))];
+    const shiftIds = [...new Set(Object.values(shifts).map(Number).filter(Boolean))];
+    if (empIds.length) {
+      const [found] = await conn.query('SELECT id FROM employees WHERE id IN (?)', [empIds]);
+      if (found.length !== empIds.length) throw new HttpError(400, 'An employee chosen no longer exists. Preview the file again.');
+    }
+    if (shiftIds.length) {
+      const [found] = await conn.query('SELECT id FROM shifts WHERE id IN (?)', [shiftIds]);
+      if (found.length !== shiftIds.length) throw new HttpError(400, 'A shift chosen no longer exists. Preview the file again.');
+    }
+
+    const now = new Date();
+    for (const r of rows) {
+      const employeeId = Number(employees[r.sheet_name]);
+      if (r.skip || !employeeId) { summary.skipped += 1; continue; }
+      if (!isIsoDate(r.date)) throw new HttpError(400, `${r.sheet_name}: bad date "${r.date}"`);
+      for (const t of [r.time_in, r.time_out]) {
+        if (t && !HHMM.test(t)) throw new HttpError(400, `${r.sheet_name} ${r.date}: time "${t}" must be HH:MM`);
+      }
+      if (!r.time_in && r.time_out) throw new HttpError(400, `${r.sheet_name} ${r.date}: time out without a time in -- skip or fix the day`);
+
+      // 1. The day's shift, as the sheet says.
+      const plan = r.rest ? 'rest' : (r.sheet_shift ? shifts[r.sheet_shift] : undefined);
+      if (plan === 'rest' || Number(plan) > 0) {
+        await conn.query(
+          `INSERT INTO employee_schedules (employee_id, work_date, shift_id, updated_by_user_id) VALUES (?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE shift_id = VALUES(shift_id), updated_by_user_id = VALUES(updated_by_user_id)`,
+          [employeeId, r.date, plan === 'rest' ? null : Number(plan), req.user.id]
+        );
+        summary.plotted += 1;
+      }
+
+      // 2. The time record.
+      const [[existing]] = await conn.query('SELECT id FROM attendance_logs WHERE employee_id = ? AND work_date = ?', [employeeId, r.date]);
+      if (!r.time_in) {
+        // No times: the day is only plotted (a rest day, or an absence). An existing record
+        // follows the new plan.
+        if (existing) await remeasureDay(employeeId, r.date, conn);
+        continue;
+      }
+      if (existing && !replace) {
+        await remeasureDay(employeeId, r.date, conn);
+        summary.kept_existing += 1;
+        continue;
+      }
+      const timeIn = localToUtc(r.date, r.time_in);
+      let timeOut = null;
+      if (r.time_out) {
+        timeOut = localToUtc(r.date, r.time_out);
+        if (timeOut <= timeIn) timeOut = localToUtc(addDays(r.date, 1), r.time_out); // past midnight
+      }
+      if (timeIn > now || (timeOut && timeOut > now)) throw new HttpError(400, `${r.sheet_name} ${r.date}: times cannot be in the future`);
+      const otMin = r.approved_ot_minutes === null || r.approved_ot_minutes === undefined || r.approved_ot_minutes === ''
+        ? 0 : Math.round(Number(r.approved_ot_minutes));
+      if (!Number.isFinite(otMin) || otMin < 0 || otMin > 16 * 60) throw new HttpError(400, `${r.sheet_name} ${r.date}: overtime must be 0 to 16 hours`);
+
+      if (existing) { await conn.query('DELETE FROM attendance_logs WHERE id = ?', [existing.id]); summary.replaced += 1; }
+      const snapshot = scheduleSnapshot(await scheduledShift(employeeId, r.date, conn));
+      await conn.query('INSERT INTO attendance_logs SET ?', [{
+        employee_id: employeeId,
+        work_date: r.date,
+        ...snapshot,
+        time_in: toDbUtc(timeIn),
+        time_out: timeOut ? toDbUtc(timeOut) : null,
+        ...metricsFor(snapshot, timeIn, timeOut),
+        // The sheet's Overtime column is the approved overtime; blank means none approved.
+        approved_ot_minutes: otMin,
+        source: 'import',
+        remarks: `Imported from ${fileName}`.slice(0, 255),
+        recorded_by_user_id: req.user.id,
+      }]);
+      summary.records += 1;
+    }
+    await conn.commit();
+    res.status(201).json(summary);
+  } catch (err) {
+    await conn.rollback();
+    next(err);
+  } finally {
+    conn.release();
   }
 });
 

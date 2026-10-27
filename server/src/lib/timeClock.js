@@ -30,6 +30,8 @@ function serializeLog(row) {
     late_minutes: row.late_minutes,
     undertime_minutes: row.undertime_minutes,
     overtime_minutes: row.overtime_minutes,
+    // Set when a supervisor approved the day's overtime; payroll then pays this figure.
+    approved_ot_minutes: row.approved_ot_minutes ?? null,
     worked_minutes: row.worked_minutes,
     source: row.source,
     remarks: row.remarks,
