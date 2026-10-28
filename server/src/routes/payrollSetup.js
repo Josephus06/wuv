@@ -80,7 +80,10 @@ function readRules(input) {
   if (!(rules.hours_per_day > 0 && rules.hours_per_day <= 24)) return { error: 'Hours per day must be between 1 and 24' };
   if (!(rules.working_days_per_year >= 200 && rules.working_days_per_year <= 366)) return { error: 'Working days per year must be between 200 and 366' };
   if (!(rules.overtime_block_minutes >= 1)) return { error: 'Overtime block must be at least 1 minute' };
-  if (!['split', 'second_cutoff'].includes(rules.contribution_schedule)) return { error: 'Choose how contributions are spread over the cutoffs' };
+  for (const k of ['sss', 'philhealth', 'pagibig']) {
+    if (!['split', 'first', 'second'].includes(rules.contribution_cutoffs[k])) return { error: 'Choose the cutoff each contribution is deducted in' };
+  }
+  rules.contribution_cutoffs = { sss: rules.contribution_cutoffs.sss, philhealth: rules.contribution_cutoffs.philhealth, pagibig: rules.contribution_cutoffs.pagibig };
   for (const k of ['night_start', 'night_end']) {
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(rules[k]))) return { error: 'Night differential hours must be HH:MM' };
   }

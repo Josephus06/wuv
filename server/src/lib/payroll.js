@@ -326,28 +326,33 @@ function computeEmployee(emp, comp, ctx) {
 
   // Government contributions: computed on the month's basic, then spread over the cutoffs.
   const monthlyBasis = monthly ? base : daily * (divisor / 12);
-  const share = (amount) => {
-    if (rules.contribution_schedule === 'second_cutoff') return Number(run.cutoff) === 2 ? amount : 0;
+  const share = (agency) => (amount) => {
+    const when = rules.contribution_cutoffs[agency];
+    if (when === 'first') return Number(run.cutoff) === 1 ? amount : 0;
+    if (when === 'second') return Number(run.cutoff) === 2 ? amount : 0;
     const first = round2(amount / 2);
     return Number(run.cutoff) === 1 ? first : round2(amount - first);
   };
+  const sssShare = share('sss');
+  const phShare = share('philhealth');
+  const hdmfShare = share('pagibig');
   const covered = (flag) => flag === null || flag === undefined || !!flag;
   const sss = covered(comp.sss_covered) ? sssContribution(monthlyBasis, rules) : null;
   const ph = covered(comp.philhealth_covered) ? philhealthContribution(monthlyBasis, rules) : null;
   const hdmf = covered(comp.hdmf_covered) ? pagibigContribution(monthlyBasis, rules) : null;
-  const sssEe = sss ? share(sss.employee) : 0;
-  const phEe = ph ? share(ph.employee) : 0;
-  const hdmfEe = hdmf ? share(hdmf.employee) : 0;
+  const sssEe = sss ? sssShare(sss.employee) : 0;
+  const phEe = ph ? phShare(ph.employee) : 0;
+  const hdmfEe = hdmf ? hdmfShare(hdmf.employee) : 0;
 
   add({ line_type: 'deduction', code: 'SSS', label: sss ? `SSS (MSC ${sss.msc.toLocaleString('en-US')})` : 'SSS', amount: sssEe });
   add({ line_type: 'deduction', code: 'PHILHEALTH', label: 'PhilHealth', amount: phEe });
   add({ line_type: 'deduction', code: 'PAGIBIG', label: 'Pag-IBIG', amount: hdmfEe });
   if (sss) {
-    add({ line_type: 'employer', code: 'SSS_ER', label: 'SSS (employer)', amount: share(sss.employer) });
-    add({ line_type: 'employer', code: 'SSS_EC', label: 'SSS EC (employer)', amount: share(sss.ec) });
+    add({ line_type: 'employer', code: 'SSS_ER', label: 'SSS (employer)', amount: sssShare(sss.employer) });
+    add({ line_type: 'employer', code: 'SSS_EC', label: 'SSS EC (employer)', amount: sssShare(sss.ec) });
   }
-  if (ph) add({ line_type: 'employer', code: 'PHILHEALTH_ER', label: 'PhilHealth (employer)', amount: share(ph.employer) });
-  if (hdmf) add({ line_type: 'employer', code: 'PAGIBIG_ER', label: 'Pag-IBIG (employer)', amount: share(hdmf.employer) });
+  if (ph) add({ line_type: 'employer', code: 'PHILHEALTH_ER', label: 'PhilHealth (employer)', amount: phShare(ph.employer) });
+  if (hdmf) add({ line_type: 'employer', code: 'PAGIBIG_ER', label: 'Pag-IBIG (employer)', amount: hdmfShare(hdmf.employer) });
 
   const taxable = round2(Math.max(0, gross - nonTaxable - sssEe - phEe - hdmfEe));
   const tax = comp.is_minimum_wage ? 0 : withholdingTax(taxable, PERIODS_PER_YEAR, rules);

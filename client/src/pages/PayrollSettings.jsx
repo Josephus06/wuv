@@ -103,6 +103,18 @@ export default function PayrollSettings() {
 
   if (!rules) return <LoadingSpinner />;
 
+  // Which cutoff of the month the agency's contribution is deducted in.
+  const deductIn = (agency) => (
+    <div className="field">
+      <label>Deducted in</label>
+      <select disabled={!editable} value={rules.contribution_cutoffs[agency]} onChange={(e) => set(`contribution_cutoffs.${agency}`, e.target.value)}>
+        <option value="split">Half in each cutoff</option>
+        <option value="first">All in the 1st cutoff</option>
+        <option value="second">All in the 2nd cutoff</option>
+      </select>
+    </div>
+  );
+
   const num = (path, label, opts = {}) => (
     <div className="field">
       <label>{label}</label>
@@ -170,13 +182,6 @@ export default function PayrollSettings() {
           {num('hours_per_day', 'Hours per working day')}
           {num('working_days_per_year', 'Working days per year', { hint: 'Monthly rate × 12 ÷ this = daily rate. 313 for a 6-day week, 261 for 5 days.' })}
           {num('overtime_block_minutes', 'Overtime counted in blocks of (minutes)', { hint: 'Overtime shorter than one block is not paid.' })}
-          <div className="field">
-            <label>Government contributions</label>
-            <select disabled={!editable} value={rules.contribution_schedule} onChange={(e) => set('contribution_schedule', e.target.value)}>
-              <option value="split">Half in each cutoff</option>
-              <option value="second_cutoff">All in the 2nd cutoff</option>
-            </select>
-          </div>
         </section>
 
         <section className="card">
@@ -211,6 +216,7 @@ export default function PayrollSettings() {
             {num('sss.ec_low', 'EC below that')}
             {num('sss.ec_high', 'EC from that')}
           </div>
+          {deductIn('sss')}
         </section>
 
         <section className="card">
@@ -221,6 +227,7 @@ export default function PayrollSettings() {
             {num('philhealth.floor', 'Income floor')}
             {num('philhealth.ceiling', 'Income ceiling')}
           </div>
+          {deductIn('philhealth')}
         </section>
 
         <section className="card">
@@ -232,6 +239,7 @@ export default function PayrollSettings() {
             {num('pagibig.low_threshold', 'Low-salary threshold')}
             {pct('pagibig.employee_rate_low', 'Employee share at or below it')}
           </div>
+          {deductIn('pagibig')}
         </section>
 
         <section className="card settings-wide">

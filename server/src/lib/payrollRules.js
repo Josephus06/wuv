@@ -35,9 +35,11 @@ const DEFAULT_RULES = {
   night_start: '22:00',
   night_end: '06:00',
 
-  // Monthly contributions are computed on the month's basic salary and spread over the two
-  // cutoffs: 'split' takes half in each, 'second_cutoff' takes all of it in the second.
-  contribution_schedule: 'split',
+  // Monthly contributions are computed on the month's basic salary and deducted, each on its
+  // own: 'split' half in each cutoff, 'first' all in the 1st cutoff, 'second' all in the 2nd.
+  // (Older rate sets have contribution_schedule 'split' | 'second_cutoff' instead; withDefaults
+  // reads that.)
+  contribution_cutoffs: { sss: 'split', philhealth: 'split', pagibig: 'split' },
 
   sss: {
     msc_min: 5000,
@@ -85,6 +87,9 @@ function withDefaults(rules = {}) {
   for (const k of ['day_multipliers', 'sss', 'philhealth', 'pagibig']) {
     out[k] = { ...DEFAULT_RULES[k], ...(rules[k] || {}) };
   }
+  const legacy = rules.contribution_schedule === 'second_cutoff' ? 'second' : 'split';
+  out.contribution_cutoffs = { sss: legacy, philhealth: legacy, pagibig: legacy, ...(rules.contribution_cutoffs || {}) };
+  delete out.contribution_schedule;
   if (!Array.isArray(out.tax_brackets) || !out.tax_brackets.length) out.tax_brackets = DEFAULT_RULES.tax_brackets;
   return out;
 }
