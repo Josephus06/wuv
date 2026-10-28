@@ -90,6 +90,7 @@ async function loadInputs(run, conn) {
 
   const [employees] = await conn.query(
     `SELECT id, employee_code, first_name, last_name, is_active, compute_ot_pay, compute_absences,
+            sss_ee_monthly, philhealth_ee_monthly, pagibig_ee_monthly,
             DATE_FORMAT(date_hired, '%Y-%m-%d') AS date_hired,
             DATE_FORMAT(date_separated, '%Y-%m-%d') AS date_separated
      FROM employees
@@ -101,7 +102,7 @@ async function loadInputs(run, conn) {
     [companyId, end, start]
   );
   const ids = employees.map((e) => e.id);
-  if (!ids.length) return { employees, comps: new Map(), sources: { assignments: new Map(), plotted: new Map() }, logs: [], holidays: new Map(), payItems: [], loans: [], loanPaid: new Map(), adjustments: [] };
+  if (!ids.length) return { employees, comps: new Map(), sources: { assignments: new Map(), plotted: new Map() }, logs: [], holidays: new Map(), payItems: [], loans: [], loanPaid: new Map(), adjustments: [], contributionOverrides: [] };
 
   const [compRows] = await conn.query(
     `SELECT employee_id, DATE_FORMAT(effective_date, '%Y-%m-%d') AS effective_date, pay_type, base_rate,
@@ -161,9 +162,14 @@ async function loadInputs(run, conn) {
     [run.id]
   );
 
+  const [contributionOverrides] = await conn.query(
+    'SELECT employee_id, code, amount FROM payroll_contribution_overrides WHERE run_id = ?',
+    [run.id]
+  );
+
   return {
     employees, comps, sources: await scheduleSources(ids, lookback, end, conn), logs, holidays,
-    payItems, loans, loanPaid, adjustments,
+    payItems, loans, loanPaid, adjustments, contributionOverrides,
   };
 }
 
@@ -340,13 +346,30 @@ function computeEmployee(emp, comp, ctx) {
   const sss = covered(comp.sss_covered) ? sssContribution(monthlyBasis, rules) : null;
   const ph = covered(comp.philhealth_covered) ? philhealthContribution(monthlyBasis, rules) : null;
   const hdmf = covered(comp.hdmf_covered) ? pagibigContribution(monthlyBasis, rules) : null;
-  const sssEe = sss ? sssShare(sss.employee) : 0;
-  const phEe = ph ? phShare(ph.employee) : 0;
-  const hdmfEe = hdmf ? hdmfShare(hdmf.employee) : 0;
+  const sssComputed = sss ? sssShare(sss.employee) : 0;
+  const phComputed = ph ? phShare(ph.employee) : 0;
+  const hdmfComputed = hdmf ? hdmfShare(hdmf.employee) : 0;
 
-  add({ line_type: 'deduction', code: 'SSS', label: sss ? `SSS (MSC ${sss.msc.toLocaleString('en-US')})` : 'SSS', amount: sssEe });
-  add({ line_type: 'deduction', code: 'PHILHEALTH', label: 'PhilHealth', amount: phEe });
-  add({ line_type: 'deduction', code: 'PAGIBIG', label: 'Pag-IBIG', amount: hdmfEe });
+  // An amount set by hand replaces the computed employee share: this run's override for the
+  // cutoff first, else the employee's fixed monthly amount (split like the computed one).
+  const runOverride = (code) => ctx.contributionOverrides.find((o) => o.employee_id === emp.id && o.code === code);
+  const employeeShare = (code, computed, monthlyFixed, shareOf) => {
+    const o = runOverride(code);
+    if (o) return { amount: round2(Number(o.amount)), note: 'set for this cutoff' };
+    if (monthlyFixed !== null && monthlyFixed !== undefined) return { amount: shareOf(Number(monthlyFixed)), note: 'fixed amount' };
+    return { amount: computed, note: null };
+  };
+  const sssEeX = employeeShare('SSS', sssComputed, emp.sss_ee_monthly, sssShare);
+  const phEeX = employeeShare('PHILHEALTH', phComputed, emp.philhealth_ee_monthly, phShare);
+  const hdmfEeX = employeeShare('PAGIBIG', hdmfComputed, emp.pagibig_ee_monthly, hdmfShare);
+  const sssEe = sssEeX.amount;
+  const phEe = phEeX.amount;
+  const hdmfEe = hdmfEeX.amount;
+  const noted = (label, x) => (x.note ? `${label} (${x.note})` : label);
+
+  add({ line_type: 'deduction', code: 'SSS', label: noted(sss ? `SSS (MSC ${sss.msc.toLocaleString('en-US')})` : 'SSS', sssEeX), amount: sssEe });
+  add({ line_type: 'deduction', code: 'PHILHEALTH', label: noted('PhilHealth', phEeX), amount: phEe });
+  add({ line_type: 'deduction', code: 'PAGIBIG', label: noted('Pag-IBIG', hdmfEeX), amount: hdmfEe });
   if (sss) {
     add({ line_type: 'employer', code: 'SSS_ER', label: 'SSS (employer)', amount: sssShare(sss.employer) });
     add({ line_type: 'employer', code: 'SSS_EC', label: 'SSS EC (employer)', amount: sssShare(sss.ec) });
@@ -354,7 +377,10 @@ function computeEmployee(emp, comp, ctx) {
   if (ph) add({ line_type: 'employer', code: 'PHILHEALTH_ER', label: 'PhilHealth (employer)', amount: phShare(ph.employer) });
   if (hdmf) add({ line_type: 'employer', code: 'PAGIBIG_ER', label: 'Pag-IBIG (employer)', amount: hdmfShare(hdmf.employer) });
 
-  const taxable = round2(Math.max(0, gross - nonTaxable - sssEe - phEe - hdmfEe));
+  // Only the mandatory share is tax-exempt: anything deducted above the computed amount (a
+  // voluntary higher contribution) stays taxable.
+  const exempt = Math.min(sssEe, sssComputed) + Math.min(phEe, phComputed) + Math.min(hdmfEe, hdmfComputed);
+  const taxable = round2(Math.max(0, gross - nonTaxable - exempt));
   const tax = comp.is_minimum_wage ? 0 : withholdingTax(taxable, PERIODS_PER_YEAR, rules);
   add({ line_type: 'deduction', code: 'TAX', label: 'Withholding tax', amount: tax });
 

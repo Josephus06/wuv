@@ -299,6 +299,8 @@ function PayslipModal({ runId, employeeId, editable, adjustments, onClose, onCha
             {' '}{slip.late_minutes} min late · {slip.undertime_minutes} min undertime · {Math.round(slip.overtime_minutes / 6) / 10} hr overtime
           </div>
 
+          {editable && <ContributionEditor runId={runId} employeeId={employeeId} slip={slip} onSaved={async () => { await onChanged(); load(); }} />}
+
           {(editable || adjustments.length > 0) && (
             <div className="payslip-group" style={{ marginTop: 18 }}>
               <h4>Adjustments for this cutoff</h4>
@@ -351,5 +353,66 @@ function PayslipModal({ runId, employeeId, editable, adjustments, onClose, onCha
         </>
       )}
     </Modal>
+  );
+}
+
+// This cutoff's SSS / PhilHealth / Pag-IBIG employee share, changed for this payroll only.
+const CONTRIBUTIONS = [
+  ['SSS', 'SSS', 'sss_ee'],
+  ['PHILHEALTH', 'PhilHealth', 'philhealth_ee'],
+  ['PAGIBIG', 'Pag-IBIG', 'pagibig_ee'],
+];
+function ContributionEditor({ runId, employeeId, slip, onSaved }) {
+  const [editing, setEditing] = useState(null); // { code, amount }
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const overridden = (code) => (slip.contribution_overrides || []).some((o) => o.code === code);
+
+  async function save(code, amount) {
+    setBusy(true);
+    setError('');
+    try {
+      await api.put(`/payroll/${runId}/contribution-overrides`, { employee_id: employeeId, code, amount });
+      setEditing(null);
+      await onSaved();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not change the contribution');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="payslip-group" style={{ marginTop: 18 }}>
+      <h4>Contributions for this cutoff</h4>
+      <p className="muted" style={{ fontSize: 12, margin: '0 0 6px' }}>
+        Change an amount for this payroll only. For an amount every payroll should use, set it on the employee&apos;s profile.
+      </p>
+      {error && <div className="error-banner">{error}</div>}
+      {CONTRIBUTIONS.map(([code, label, field]) => (
+        <div key={code} className="payslip-adjustment">
+          <span>
+            {label}
+            {overridden(code) && <span className="badge badge-info" style={{ marginLeft: 6 }}>changed</span>}
+          </span>
+          {editing?.code === code ? (
+            <form style={{ display: 'flex', gap: 6, alignItems: 'center' }} onSubmit={(e) => { e.preventDefault(); save(code, editing.amount); }}>
+              <input type="number" step="0.01" min="0" required autoFocus style={{ width: 110 }} value={editing.amount}
+                onChange={(e) => setEditing({ code, amount: e.target.value })} />
+              <button type="submit" className="btn btn-primary btn-sm" disabled={busy}>Save</button>
+              <button type="button" className="btn btn-sm" onClick={() => setEditing(null)}>Cancel</button>
+            </form>
+          ) : (
+            <>
+              <span className="num">{peso(slip[field])}</span>
+              <span style={{ display: 'flex', gap: 6 }}>
+                <button type="button" className="btn btn-sm" disabled={busy} onClick={() => setEditing({ code, amount: String(Number(slip[field])) })}>Change</button>
+                {overridden(code) && <button type="button" className="btn btn-sm" disabled={busy} onClick={() => save(code, null)}>Use computed</button>}
+              </span>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }

@@ -154,7 +154,11 @@ router.get('/:id/employees/:employeeId', requireAuth, requirePermission(ROUTE, '
       'SELECT line_type, code, label, quantity, unit, rate, amount, is_taxable FROM payroll_run_lines WHERE run_employee_id = ? ORDER BY sort_order',
       [pe.id]
     );
-    res.json({ ...pe, warnings: parseJson(pe.warnings), lines });
+    const [overrides] = await pool.query(
+      'SELECT code, amount FROM payroll_contribution_overrides WHERE run_id = ? AND employee_id = ?',
+      [req.params.id, req.params.employeeId]
+    );
+    res.json({ ...pe, warnings: parseJson(pe.warnings), lines, contribution_overrides: overrides });
   } catch (err) {
     next(err);
   }
@@ -270,6 +274,41 @@ router.post('/:id/adjustments', requireAuth, requirePermission(ROUTE, 'can_edit'
     }]);
     await computeRun(req.params.id);
     res.status(201).json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Sets (amount) or clears (amount null) this cutoff's SSS / PhilHealth / Pag-IBIG employee
+// share for one employee of a draft run, then recomputes.
+const CONTRIBUTION_CODES = ['SSS', 'PHILHEALTH', 'PAGIBIG'];
+router.put('/:id/contribution-overrides', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
+  try {
+    await draftRun(req.params.id);
+    const employeeId = Number(req.body.employee_id);
+    const { code } = req.body;
+    if (!CONTRIBUTION_CODES.includes(code)) return res.status(400).json({ error: 'Choose SSS, PhilHealth or Pag-IBIG' });
+    const [[inRun]] = await pool.query(
+      'SELECT id FROM payroll_run_employees WHERE run_id = ? AND employee_id = ?', [req.params.id, employeeId]
+    );
+    if (!inRun) return res.status(400).json({ error: 'That employee is not in this payroll' });
+    if (req.body.amount === null || req.body.amount === '' || req.body.amount === undefined) {
+      await pool.query(
+        'DELETE FROM payroll_contribution_overrides WHERE run_id = ? AND employee_id = ? AND code = ?',
+        [req.params.id, employeeId, code]
+      );
+    } else {
+      const amount = Number(req.body.amount);
+      if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: 'Enter an amount, 0 or more' });
+      await pool.query(
+        `INSERT INTO payroll_contribution_overrides (run_id, employee_id, code, amount, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE amount = VALUES(amount), created_by_user_id = VALUES(created_by_user_id)`,
+        [req.params.id, employeeId, code, amount, req.user.id]
+      );
+    }
+    await computeRun(req.params.id);
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

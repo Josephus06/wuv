@@ -255,6 +255,28 @@ router.post('/:id/pay-rate', requireAuth, requirePermission(ROUTE, 'can_edit'), 
   }
 });
 
+// Fixed monthly SSS / PhilHealth / Pag-IBIG employee shares, replacing the computed ones in
+// every payroll while set. A blank clears one back to computed.
+const CONTRIBUTION_COLUMNS = ['sss_ee_monthly', 'philhealth_ee_monthly', 'pagibig_ee_monthly'];
+router.put('/:id/contributions', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
+  try {
+    const values = {};
+    for (const col of CONTRIBUTION_COLUMNS) {
+      const v = req.body[col];
+      if (v === null || v === undefined || v === '') { values[col] = null; continue; }
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'Contribution amounts must be 0 or more' });
+      values[col] = Math.round(n * 100) / 100;
+    }
+    const [result] = await pool.query('UPDATE employees SET ? WHERE id = ?', [values, req.params.id]);
+    if (!result.affectedRows) return res.status(404).json({ error: 'Not found' });
+    res.json(values);
+  } catch (err) {
+    if (err.code === 'ER_BAD_FIELD_ERROR') return res.status(503).json({ error: 'Run db/add-contribution-overrides.js first.' });
+    next(err);
+  }
+});
+
 // Removes a rate entered by mistake. Approved payrolls keep what they paid (their lines are
 // stored); a draft picks up the change when it is recomputed.
 router.delete('/:id/pay-rate/:rateId', requireAuth, requirePermission(ROUTE, 'can_delete'), async (req, res, next) => {

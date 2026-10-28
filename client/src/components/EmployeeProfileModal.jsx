@@ -95,6 +95,7 @@ export default function EmployeeProfileModal({ employeeId, isHr, departments, co
   const [meta, setMeta] = useState(null); // created / updated / by
   const [pay, setPay] = useState(null);
   const [pinSet, setPinSet] = useState(false);
+  const [contrib, setContrib] = useState(null);
   const [options, setOptions] = useState({});
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
@@ -109,6 +110,7 @@ export default function EmployeeProfileModal({ employeeId, isHr, departments, co
       setMeta({ created_at: data.created_at, updated_at: data.updated_at, updated_by: data.updated_by_name });
       setPay(data.pay || null);
       setPinSet(!!data.kiosk_pin_set);
+      setContrib({ sss_ee_monthly: data.sss_ee_monthly, philhealth_ee_monthly: data.philhealth_ee_monthly, pagibig_ee_monthly: data.pagibig_ee_monthly });
       setLoading(false);
     }).catch((e) => { setError(e.response?.data?.error || 'Could not load this employee.'); setLoading(false); });
   }, [employeeId, isNew, isHr]);
@@ -348,6 +350,7 @@ export default function EmployeeProfileModal({ employeeId, isHr, departments, co
                     </label>
                   </div>
                   <PayRate employeeId={employeeId} pay={pay} onChange={setPay} />
+                  {employeeId && contrib && <Contributions employeeId={employeeId} saved={contrib} onChange={setContrib} />}
                   <TimeClockPin employeeId={employeeId} isSet={pinSet} onChange={setPinSet} />
                 </>
               )}
@@ -476,6 +479,57 @@ function PayRate({ employeeId, pay, onChange }) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// Fixed monthly SSS / PhilHealth / Pag-IBIG employee shares. Blank = computed from the rate
+// tables in Payroll Settings. Saved on its own (not with the form's Save).
+const CONTRIBUTION_FIELDS = [
+  ['sss_ee_monthly', 'SSS'],
+  ['philhealth_ee_monthly', 'PhilHealth'],
+  ['pagibig_ee_monthly', 'Pag-IBIG'],
+];
+function Contributions({ employeeId, saved, onChange }) {
+  const toForm = (v) => Object.fromEntries(CONTRIBUTION_FIELDS.map(([k]) => [k, v[k] === null || v[k] === undefined ? '' : String(Number(v[k]))]));
+  const [values, setValues] = useState(() => toForm(saved));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const dirty = JSON.stringify(values) !== JSON.stringify(toForm(saved));
+
+  async function save() {
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const { data } = await api.put(`/employees/${employeeId}/contributions`, values);
+      onChange(data);
+      setValues(toForm(data));
+      setMsg('Saved. Draft payrolls use it when recomputed.');
+    } catch (e) { setErr(e.response?.data?.error || 'Could not save the contributions.'); }
+    setBusy(false);
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 14, background: 'var(--panel-2, transparent)' }}>
+      <h4 style={{ margin: '0 0 6px' }}>Government Contributions</h4>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+        Leave blank to compute from the rates in Payroll Settings. An amount here is the employee&apos;s share for the
+        whole month, used in every payroll and split over the cutoffs like the computed one. The employer share is still computed.
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        {CONTRIBUTION_FIELDS.map(([k, label]) => (
+          <div className="field" style={{ maxWidth: 170 }} key={k}>
+            <label>{label} (monthly)</label>
+            <input type="number" step="0.01" min="0" placeholder="Computed" value={values[k]}
+              onChange={(e) => setValues({ ...values, [k]: e.target.value })} />
+          </div>
+        ))}
+        <button type="button" className="btn btn-primary" style={{ marginBottom: 12 }} disabled={busy || !dirty} onClick={save}>
+          {busy ? 'Saving…' : 'Save Contributions'}
+        </button>
+      </div>
+      {err && <div className="error-banner">{err}</div>}
+      {msg && !dirty && <div className="muted" style={{ fontSize: 12 }}>{msg}</div>}
     </div>
   );
 }
