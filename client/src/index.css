@@ -2071,6 +2071,27 @@ tr.clickable:hover td { background: var(--accent-bg); }
   .kiosk-pad button { height: 58px; }
   .kiosk-punch { width: 170px; height: 170px; font-size: 26px; }
 }
+.kiosk-modes { display: flex; gap: 4px; background: #1b2413; border-radius: 12px; padding: 4px; margin-bottom: 14px; }
+.kiosk-modes button { background: transparent; border: 0; color: #b9c4ad; font: inherit; font-size: 16px; font-weight: 600; padding: 10px 22px; border-radius: 9px; cursor: pointer; }
+.kiosk-modes button.is-on { background: #a3c255; color: #13190d; }
+.qr-scanner { position: relative; width: min(360px, 86vw); aspect-ratio: 1; border-radius: 18px; overflow: hidden; background: #000; }
+.qr-scanner video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.qr-scanner video.is-mirrored { transform: scaleX(-1); }
+.qr-scanner-frame { position: absolute; inset: 14%; border: 4px solid rgba(163, 194, 85, 0.9); border-radius: 16px; box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.28); pointer-events: none; }
+
+/* Time clock QR badges: ID-card size, cut lines between them. */
+.qr-badges { display: flex; flex-wrap: wrap; gap: 0; justify-content: center; padding: 12px 0; }
+.qr-badge { width: 54mm; height: 86mm; box-sizing: border-box; border: 1px dashed #9ca3af; background: #fff; color: #111;
+  display: flex; flex-direction: column; align-items: center; padding: 4mm 3mm; text-align: center; break-inside: avoid; }
+.qr-badge-logo { max-width: 40mm; max-height: 12mm; object-fit: contain; }
+.qr-badge-code { width: 40mm; height: 40mm; margin: 3mm 0 2mm; image-rendering: pixelated; }
+.qr-badge-name { font-weight: 800; font-size: 12pt; line-height: 1.15; text-transform: uppercase; }
+.qr-badge-sub { font-size: 8pt; color: #444; margin-top: 1mm; }
+.qr-badge-foot { margin-top: auto; font-size: 6.5pt; color: #666; }
+@media print {
+  .qr-badges { padding: 0; justify-content: flex-start; }
+  .qr-badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
 .kiosk-link-box { display: flex; gap: 8px; }
 .kiosk-link-box input { font-family: monospace; font-size: 12px; }
 .kiosk-pin { font-family: monospace; font-size: 15px; letter-spacing: 2px; font-weight: 700; color: var(--text-h); }

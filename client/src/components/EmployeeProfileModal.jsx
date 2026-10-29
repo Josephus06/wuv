@@ -95,6 +95,7 @@ export default function EmployeeProfileModal({ employeeId, isHr, departments, co
   const [meta, setMeta] = useState(null); // created / updated / by
   const [pay, setPay] = useState(null);
   const [pinSet, setPinSet] = useState(false);
+  const [qrSet, setQrSet] = useState(false);
   const [contrib, setContrib] = useState(null);
   const [options, setOptions] = useState({});
   const [loading, setLoading] = useState(!isNew);
@@ -110,6 +111,7 @@ export default function EmployeeProfileModal({ employeeId, isHr, departments, co
       setMeta({ created_at: data.created_at, updated_at: data.updated_at, updated_by: data.updated_by_name });
       setPay(data.pay || null);
       setPinSet(!!data.kiosk_pin_set);
+      setQrSet(!!data.kiosk_qr_set);
       setContrib({ sss_ee_monthly: data.sss_ee_monthly, philhealth_ee_monthly: data.philhealth_ee_monthly, pagibig_ee_monthly: data.pagibig_ee_monthly });
       setLoading(false);
     }).catch((e) => { setError(e.response?.data?.error || 'Could not load this employee.'); setLoading(false); });
@@ -352,6 +354,7 @@ export default function EmployeeProfileModal({ employeeId, isHr, departments, co
                   <PayRate employeeId={employeeId} pay={pay} onChange={setPay} />
                   {employeeId && contrib && <Contributions employeeId={employeeId} saved={contrib} onChange={setContrib} />}
                   <TimeClockPin employeeId={employeeId} isSet={pinSet} onChange={setPinSet} />
+                  <TimeClockQr employeeId={employeeId} isSet={qrSet} onChange={setQrSet} />
                 </>
               )}
 
@@ -530,6 +533,58 @@ function Contributions({ employeeId, saved, onChange }) {
       </div>
       {err && <div className="error-banner">{err}</div>}
       {msg && !dirty && <div className="muted" style={{ fontSize: 12 }}>{msg}</div>}
+    </div>
+  );
+}
+
+// The time clock QR badge: scanned at the branch time clock's camera instead of typing a PIN.
+// Unlike a PIN it can be printed again; a new badge retires the old one (a lost badge).
+const printBadge = (employeeId) => window.open(`/kiosk-devices/badges/print?employee_id=${employeeId}`, '_blank');
+
+function TimeClockQr({ employeeId, isSet, onChange }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function generate() {
+    if (isSet && !confirm('Make a new QR badge for this employee? The old badge stops working.')) return;
+    setBusy(true); setErr('');
+    try {
+      await api.post(`/kiosk-admin/qr/${employeeId}`);
+      onChange(true);
+      printBadge(employeeId);
+    } catch (e) { setErr(e.response?.data?.error || 'Could not make a badge.'); }
+    setBusy(false);
+  }
+
+  async function remove() {
+    if (!confirm('Remove this employee’s QR badge? It stops working on the time clock.')) return;
+    setBusy(true); setErr('');
+    try {
+      await api.delete(`/kiosk-admin/qr/${employeeId}`);
+      onChange(false);
+    } catch (e) { setErr(e.response?.data?.error || 'Could not remove the badge.'); }
+    setBusy(false);
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 14, background: 'var(--panel-2, transparent)' }}>
+      <h4 style={{ margin: '0 0 6px' }}>Time Clock QR Badge</h4>
+      {!employeeId ? (
+        <div className="muted" style={{ fontSize: 13 }}>Save the employee first, then give them a QR badge here.</div>
+      ) : (
+        <>
+          <div style={{ marginBottom: 8 }}>
+            {isSet ? <span className="badge badge-success">Badge set</span> : <span className="badge badge-muted">No badge</span>}
+            <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>Scanned at the branch time clock&apos;s camera to time in and out.</span>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {isSet && <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => printBadge(employeeId)}>Print Badge</button>}
+            <button type="button" className={`btn btn-sm${isSet ? '' : ' btn-primary'}`} disabled={busy} onClick={generate}>{isSet ? 'New Badge' : 'Give QR Badge'}</button>
+            {isSet && <button type="button" className="btn btn-sm" disabled={busy} onClick={remove}>Remove Badge</button>}
+          </div>
+          {err && <div className="error-banner" style={{ marginTop: 8 }}>{err}</div>}
+        </>
+      )}
     </div>
   );
 }

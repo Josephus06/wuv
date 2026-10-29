@@ -134,6 +134,7 @@ import Schedule from './pages/Schedule';
 import DtrPrint from './pages/DtrPrint';
 import PayslipPrint from './pages/PayslipPrint';
 import PayrollRegisterPrint from './pages/PayrollRegisterPrint';
+import QrBadgesPrint from './pages/QrBadgesPrint';
 import Kiosk from './pages/Kiosk';
 import KioskDevices from './pages/KioskDevices';
 import AttendanceImport from './pages/AttendanceImport';
@@ -181,6 +182,7 @@ function App() {
       <Route path="/attendance/dtr/print" element={<ProtectedRoute><DtrPrint /></ProtectedRoute>} />
       <Route path="/payroll/:id/payslips/print" element={<ProtectedRoute><PayslipPrint /></ProtectedRoute>} />
       <Route path="/payroll/:id/print" element={<ProtectedRoute><PayrollRegisterPrint /></ProtectedRoute>} />
+      <Route path="/kiosk-devices/badges/print" element={<ProtectedRoute><QrBadgesPrint /></ProtectedRoute>} />
       <Route
         element={
           <ProtectedRoute>

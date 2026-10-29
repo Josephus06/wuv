@@ -38,6 +38,7 @@ export default function KioskDevices() {
   const [form, setForm] = useState({ name: '', branch_id: '', is_active: true });
   const [link, setLink] = useState(null); // { name, url } shown once
   const [pinRun, setPinRun] = useState(null); // { company_id } | { generated: [] }
+  const [badgeRun, setBadgeRun] = useState(null); // { company_id, branch_id, issue }
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
 
@@ -127,6 +128,7 @@ export default function KioskDevices() {
       <div className="page-header">
         <h1>Time Clock Devices</h1>
         <div style={{ display: 'flex', gap: 8 }}>
+          {can('/employees', 'can_edit') && <button className="btn" onClick={() => setBadgeRun({ company_id: '', branch_id: '', issue: true })}>Print QR Badges</button>}
           {can('/employees', 'can_edit') && <button className="btn" onClick={() => { setPinRun({ company_id: '' }); setError(''); }}>Give PINs to Employees</button>}
           {can(ROUTE, 'can_add') && <button className="btn btn-primary" onClick={() => open(null)}>Add Device</button>}
         </div>
@@ -134,13 +136,14 @@ export default function KioskDevices() {
 
       <div className="card" style={{ marginBottom: 16 }}>
         <p style={{ margin: 0 }}>
-          A <strong>time clock</strong> is a branch tablet or PC where employees time in and out with their own 6-digit PIN,
+          A <strong>time clock</strong> is a branch tablet or PC where employees time in and out with their own 6-digit PIN or QR badge,
           without logging in. Add a device here, then open its link once on that device and leave it on the time clock screen.
           Only registered devices can record time, and each record shows which device it came from.
         </p>
         <p className="muted" style={{ margin: '8px 0 0' }}>
           Each employee&apos;s PIN is set in their profile (Employees → Edit → Employment Info), or for everyone at once with
-          <em> Give PINs to Employees</em>.
+          <em> Give PINs to Employees</em>. For QR badges, choose <em>Scan QR</em> on the time clock screen (it uses the
+          device&apos;s camera, or a USB QR scanner) and hand out badges from <em>Print QR Badges</em>.
         </p>
       </div>
 
@@ -206,6 +209,43 @@ export default function KioskDevices() {
             <a className="btn" href={link.url} target="_blank" rel="noreferrer">Open on this computer</a>
             <button type="button" className="btn btn-primary" onClick={() => setLink(null)}>Done</button>
           </div>
+        </Modal>
+      )}
+
+      {badgeRun && (
+        <Modal title="Print QR Badges" onClose={() => setBadgeRun(null)}>
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            const q = new URLSearchParams(Object.entries({
+              company_id: badgeRun.company_id, branch_id: badgeRun.branch_id, issue: badgeRun.issue ? '1' : '',
+            }).filter(([, v]) => v));
+            window.open(`/kiosk-devices/badges/print?${q}`, '_blank');
+            setBadgeRun(null);
+          }}>
+            <p>One ID-size badge per active employee, to print and cut. A badge can be printed again at any time; a lost one is replaced from the employee&apos;s profile (New Badge).</p>
+            <div className="field">
+              <label>Company</label>
+              <select value={badgeRun.company_id} onChange={(e) => setBadgeRun({ ...badgeRun, company_id: e.target.value })}>
+                <option value="">All companies</option>
+                {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label>Branch</label>
+              <select value={badgeRun.branch_id} onChange={(e) => setBadgeRun({ ...badgeRun, branch_id: e.target.value })}>
+                <option value="">All branches</option>
+                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </div>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input type="checkbox" checked={badgeRun.issue} onChange={(e) => setBadgeRun({ ...badgeRun, issue: e.target.checked })} />
+              Also give a badge to employees who do not have one yet
+            </label>
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={() => setBadgeRun(null)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Open Badges</button>
+            </div>
+          </form>
         </Modal>
       )}
 

@@ -172,6 +172,7 @@ router.get('/:id', requireAuth, requirePermission(ROUTE, 'can_view'), async (req
     // The time-clock PIN is only ever known as a hash; what HR sees is whether one is set.
     row.kiosk_pin_set = !!row.kiosk_pin_hash;
     delete row.kiosk_pin_hash;
+    row.kiosk_qr_set = !!row.kiosk_qr_set_at;
     if (!(await isHr(req.user.id))) {
       const dir = Object.fromEntries(DIRECTORY_COLUMNS.map((c) => [c, row[c]]));
       return res.json({

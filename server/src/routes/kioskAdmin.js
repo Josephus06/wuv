@@ -4,7 +4,9 @@
 const express = require('express');
 const pool = require('../db');
 const { requireAuth, requirePermission } = require('../middleware/auth');
-const { newPin, pinHash, newDeviceToken, tokenHash } = require('../lib/kiosk');
+const {
+  newPin, pinHash, newDeviceToken, tokenHash, qrCode,
+} = require('../lib/kiosk');
 
 const router = express.Router();
 const ROUTE = '/kiosk-devices';
@@ -114,6 +116,64 @@ router.post('/pins', requireAuth, requirePermission('/employees', 'can_edit'), a
       out.push({ ...e, pin });
     }
     res.json({ generated: out });
+  } catch (err) { next(err); }
+});
+
+// --- QR badges (part of the employee record: Edit on Employees) ------------------------
+// Unlike a PIN, a badge's code can be shown again (it is worked out, not stored), so badges
+// can be reprinted. "New badge" retires the old one, e.g. a lost badge.
+
+const BADGE_SELECT = `SELECT e.id, e.employee_code, e.first_name, e.last_name, e.position_title, e.kiosk_qr_version,
+         c.name AS company_name, c.code AS company_code, l.location_name AS branch_name
+  FROM employees e LEFT JOIN companies c ON c.id = e.company_id LEFT JOIN locations l ON l.id = e.branch_id`;
+const badge = (e) => ({
+  id: e.id, employee_code: e.employee_code, name: `${e.first_name} ${e.last_name}`, position_title: e.position_title,
+  company_name: e.company_name, company_code: e.company_code, branch_name: e.branch_name,
+  code: qrCode(e.id, e.kiosk_qr_version),
+});
+
+router.post('/qr/:employeeId', requireAuth, requirePermission('/employees', 'can_edit'), async (req, res, next) => {
+  try {
+    const [result] = await pool.query(
+      'UPDATE employees SET kiosk_qr_version = kiosk_qr_version + 1, kiosk_qr_set_at = NOW() WHERE id = ?', [req.params.employeeId]
+    );
+    if (!result.affectedRows) return res.status(404).json({ error: 'Not found' });
+    const [[e]] = await pool.query(`${BADGE_SELECT} WHERE e.id = ?`, [req.params.employeeId]);
+    res.json(badge(e));
+  } catch (err) { next(err); }
+});
+
+router.delete('/qr/:employeeId', requireAuth, requirePermission('/employees', 'can_edit'), async (req, res, next) => {
+  try {
+    await pool.query('UPDATE employees SET kiosk_qr_set_at = NULL WHERE id = ?', [req.params.employeeId]);
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+// Badges to print: one employee (?employee_id=), or every active employee of a company /
+// branch. `issue=1` first gives a badge to those without one, so a first rollout is one click.
+router.get('/qr-badges', requireAuth, requirePermission('/employees', 'can_edit'), async (req, res, next) => {
+  try {
+    const where = [];
+    const params = [];
+    if (req.query.employee_id) { where.push('e.id = ?'); params.push(req.query.employee_id); } else {
+      where.push('e.is_active = TRUE');
+      if (req.query.company_id) { where.push('e.company_id = ?'); params.push(req.query.company_id); }
+      if (req.query.branch_id) { where.push('e.branch_id = ?'); params.push(req.query.branch_id); }
+    }
+    if (req.query.issue === '1') {
+      await pool.query(
+        `UPDATE employees e SET e.kiosk_qr_version = e.kiosk_qr_version + 1, e.kiosk_qr_set_at = NOW()
+         WHERE ${[...where, 'e.kiosk_qr_set_at IS NULL'].join(' AND ')}`,
+        params
+      );
+    }
+    const [rows] = await pool.query(
+      `${BADGE_SELECT} WHERE ${[...where, 'e.kiosk_qr_set_at IS NOT NULL'].join(' AND ')}
+       ORDER BY c.name, l.location_name, e.last_name, e.first_name`,
+      params
+    );
+    res.json(rows.map(badge));
   } catch (err) { next(err); }
 });
 

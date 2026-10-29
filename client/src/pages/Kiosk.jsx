@@ -1,19 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import api from '../api/client';
+import QrScanner from '../components/QrScanner';
 import { COMPANY } from '../config/company';
 import { formatClock, formatLocalTime, formatMinutes } from '../utils/attendance';
 
 // The branch time clock: no login. Opened once on a branch tablet from the secret link HR
-// made under Time Clock Devices; employees type their private PIN, see their name, and press
-// the one button that applies (Time In or Time Out). The server takes the time.
+// made under Time Clock Devices. Two ways to stamp, chosen on the device (and remembered):
+//   Enter PIN  the employee types their private PIN, sees their name, and presses the one
+//              button that applies (Time In or Time Out).
+//   Scan QR    the employee holds their QR badge up to the camera; the scan IS the stamp
+//              (Time In, or Time Out if they are timed in). A handheld USB scanner works too.
+// The server takes the time.
 //
-// Screens: pin -> confirm -> done -> back to pin. A confirm or done screen left alone goes
-// back to the PIN pad by itself, so the next person never sees someone else's name.
+// Screens: pin (the PIN pad or the camera) -> confirm (PIN only) -> done / info -> back to pin.
+// A screen left alone goes back by itself, so the next person never sees someone else's name.
 
 const PIN_LENGTH = 6;
 const CONFIRM_TIMEOUT_MS = 20000;
 const DONE_TIMEOUT_MS = 6000;
+const SCAN_DONE_MS = 4000;
+const SAME_BADGE_IGNORE_MS = 8000; // the same badge still in front of the camera after its stamp
+
+function stored(key, fallback) {
+  try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
+}
+function store(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* private mode: just not remembered */ }
+}
 
 export default function Kiosk() {
   const { token } = useParams();
@@ -26,7 +40,12 @@ export default function Kiosk() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState(() => stored('kiosk-mode', 'pin'));
+  const [facing, setFacing] = useState(() => stored('kiosk-camera', 'user'));
+  const [cameraError, setCameraError] = useState('');
   const timer = useRef(null);
+  const lastScan = useRef({ code: '', at: 0 });
+  const wedge = useRef(''); // characters typed by a USB QR scanner
 
   useEffect(() => {
     api.get(`/kiosk/${token}`)
@@ -46,6 +65,7 @@ export default function Kiosk() {
     setResult(null);
     setScreen('pin');
     setBusy(false);
+    setError('');
   }, []);
 
   const after = useCallback((ms) => {
@@ -54,6 +74,31 @@ export default function Kiosk() {
   }, [reset]);
 
   useEffect(() => () => clearTimeout(timer.current), []);
+
+  function chooseMode(m) { setMode(m); store('kiosk-mode', m); setError(''); }
+  function flipCamera() { const f = facing === 'user' ? 'environment' : 'user'; setFacing(f); store('kiosk-camera', f); }
+
+  // A QR badge: one request both identifies and stamps.
+  const scan = useCallback(async (text) => {
+    const code = String(text).trim();
+    const now = Date.now();
+    if (busy || screen !== 'pin' || (code === lastScan.current.code && now - lastScan.current.at < SAME_BADGE_IGNORE_MS)) return;
+    lastScan.current = { code, at: now };
+    setBusy(true);
+    setError('');
+    try {
+      const { data } = await api.post(`/kiosk/${token}/scan`, { qr: code });
+      setResult(data);
+      setScreen(data.action === 'in' || data.action === 'out' ? 'done' : 'info');
+      after(SCAN_DONE_MS);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not record the time. Try again.');
+      after(DONE_TIMEOUT_MS); // clears the message for the next person
+    } finally {
+      lastScan.current = { code, at: Date.now() };
+      setBusy(false);
+    }
+  }, [busy, screen, token, after]);
 
   const lookup = useCallback(async (fullPin) => {
     setBusy(true);
@@ -85,13 +130,19 @@ export default function Kiosk() {
   // A hardware keyboard works too (a PC at the front desk).
   useEffect(() => {
     const onKey = (e) => {
+      if (mode === 'qr') {
+        // A USB scanner types the badge's code and presses Enter.
+        if (e.key === 'Enter') { if (wedge.current) scan(wedge.current); wedge.current = ''; } else if (e.key.length === 1) wedge.current = (wedge.current + e.key).slice(-80);
+        else if (e.key === 'Escape') reset();
+        return;
+      }
       if (/^\d$/.test(e.key)) press(e.key);
       else if (e.key === 'Backspace') press('back');
       else if (e.key === 'Escape') { if (screen === 'pin') press('clear'); else reset(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [press, reset, screen]);
+  }, [press, reset, screen, mode, scan]);
 
   async function stamp() {
     setBusy(true);
@@ -145,6 +196,25 @@ export default function Kiosk() {
       </div>
 
       {screen === 'pin' && (
+        <div className="kiosk-modes" role="tablist">
+          <button type="button" role="tab" aria-selected={mode === 'qr'} className={mode === 'qr' ? 'is-on' : ''} onClick={() => chooseMode('qr')}>Scan QR</button>
+          <button type="button" role="tab" aria-selected={mode === 'pin'} className={mode === 'pin' ? 'is-on' : ''} onClick={() => chooseMode('pin')}>Enter PIN</button>
+        </div>
+      )}
+
+      {/* Kept mounted behind the result screens so the camera does not restart for every person. */}
+      {mode === 'qr' && (
+        <div className="kiosk-panel" style={screen === 'pin' ? undefined : { display: 'none' }}>
+          <div className="kiosk-prompt">{busy ? 'Saving…' : 'Hold your QR badge up to the camera'}</div>
+          {cameraError ? <div className="kiosk-error">{cameraError}</div> : (
+            <QrScanner onScan={scan} onError={setCameraError} paused={busy || screen !== 'pin'} facing={facing} />
+          )}
+          {error && <div className="kiosk-error">{error}</div>}
+          <button type="button" className="kiosk-fullscreen" onClick={flipCamera}>Switch camera</button>
+        </div>
+      )}
+
+      {screen === 'pin' && mode !== 'qr' && (
         <div className="kiosk-panel">
           <div className="kiosk-prompt">{busy ? 'Checking…' : 'Enter your PIN'}</div>
           <div className="kiosk-dots" aria-label={`${pin.length} of ${PIN_LENGTH} digits entered`}>
@@ -186,6 +256,19 @@ export default function Kiosk() {
             </>
           )}
           <button type="button" className="kiosk-cancel" disabled={busy} onClick={reset}>{who.action === 'done' ? 'OK' : 'Not me — cancel'}</button>
+        </div>
+      )}
+
+      {screen === 'info' && result && (
+        <div className="kiosk-panel">
+          <div className="kiosk-hello">Hi, {result.employee.first_name}!</div>
+          <div className="kiosk-sub">{result.employee.name}{result.employee.employee_code ? ` · ${result.employee.employee_code}` : ''}</div>
+          <div className="kiosk-done-note">
+            {result.action === 'recent'
+              ? <>Already timed in at {formatLocalTime(result.log.time_in_local)}. Scan again at the end of your shift to time out.</>
+              : <>Already done for today: {formatLocalTime(result.log.time_in_local)} – {formatLocalTime(result.log.time_out_local, result.today.work_date)}</>}
+          </div>
+          <button type="button" className="kiosk-cancel" onClick={reset}>OK</button>
         </div>
       )}
 

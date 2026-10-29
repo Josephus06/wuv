@@ -74,4 +74,30 @@ function clearFailures(key) {
   failures.delete(key);
 }
 
-module.exports = { PIN_RE, pinHash, isWeakPin, newPin, newDeviceToken, tokenHash, lockedFor, recordFailure, clearFailures, MAX_FAILURES };
+// QR badges. The code on a badge is "WVQR1.<employee id>.<badge version>.<signature>", signed
+// with the server secret, so a badge cannot be made up from an employee number, and nothing
+// secret is stored: the same badge can be printed again any time. A new badge raises the
+// version (employees.kiosk_qr_version), which retires the old one.
+const QR_RE = /^WVQR1\.(\d{1,12})\.(\d{1,6})\.([A-Za-z0-9_-]{22})$/;
+
+function qrSignature(employeeId, version) {
+  return crypto.createHmac('sha256', pinSecret()).update(`kiosk-qr:${employeeId}:${version}`).digest('base64url').slice(0, 22);
+}
+
+function qrCode(employeeId, version) {
+  return `WVQR1.${employeeId}.${version}.${qrSignature(employeeId, version)}`;
+}
+
+// { employeeId, version } for a genuine badge code, else null.
+function parseQr(text) {
+  const m = QR_RE.exec(String(text || '').trim());
+  if (!m) return null;
+  const [, id, version, sig] = m;
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(qrSignature(Number(id), Number(version))))) return null;
+  return { employeeId: Number(id), version: Number(version) };
+}
+
+module.exports = {
+  PIN_RE, pinHash, isWeakPin, newPin, newDeviceToken, tokenHash, lockedFor, recordFailure, clearFailures, MAX_FAILURES,
+  qrCode, parseQr,
+};
