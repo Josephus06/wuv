@@ -463,7 +463,7 @@ async function computeRun(runId) {
       [runId]
     );
     if (!run) { const e = new Error('Payroll not found'); e.status = 404; throw e; }
-    if (run.status !== 'draft') { const e = new Error('This payroll is approved. Reopen it before recomputing.'); e.status = 409; throw e; }
+    if (run.status !== 'draft') { const e = new Error('This payroll is out for checking, approval or approved, and locked. Return it to draft (or reopen it) before recomputing.'); e.status = 409; throw e; }
 
     const { ruleSetId, effectiveFrom, rules } = await loadRules(run.period_end, conn);
     const inputs = await loadInputs(run, conn);

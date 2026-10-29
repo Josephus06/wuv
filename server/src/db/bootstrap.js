@@ -98,6 +98,7 @@ const STEPS = [
   ['add-employee-profile.js', 'employee profile (personal, employment, other info) and dated pay rates'],
   ['create-payroll.js', 'payroll: rule sets, holidays, allowances, loans and semi-monthly runs'],
   ['add-contribution-overrides.js', 'contribution amounts set by hand, per employee and per payroll'],
+  ['add-payroll-review.js', 'payroll checking (Noted By) before approval'],
 
   // Last: registers any page the migrations above did not, and gives the seeded admin an
   // account_type plus full access to everything.

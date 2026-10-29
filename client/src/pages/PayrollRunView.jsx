@@ -4,7 +4,10 @@ import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { csvDownload, formatDate, formatPeriod, peso, qtyLabel } from '../utils/payroll';
+import { csvDownload, formatDate, formatPeriod, peso, qtyLabel, RUN_STATUS } from '../utils/payroll';
+import { parseUtc } from '../utils/datetime';
+
+const displayDateTime = (v) => parseUtc(v)?.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) || '';
 
 const LINE_GROUPS = [
   ['earning', 'Earnings'],
@@ -35,7 +38,10 @@ export default function PayrollRunView() {
 
   async function action(kind) {
     const prompts = {
-      approve: 'Approve this payroll? It will be recomputed one last time and then locked. Loan deductions in it will count against the loan balances.',
+      submit: 'Submit this payroll for checking? It is recomputed one last time and locked; you are recorded as Prepared By.',
+      check: 'Mark this payroll as checked? You are recorded as Noted By, and it goes for approval.',
+      approve: 'Approve this payroll? It is locked, and its loan deductions count against the loan balances. You are recorded as Approved By.',
+      return: 'Return this payroll to draft? Prepared By and Noted By are cleared, and it has to be submitted and checked again.',
       reopen: 'Reopen this payroll? It goes back to draft, and its loan deductions stop counting until it is approved again.',
       delete: 'Delete this draft payroll? Its adjustments are deleted too.',
     };
@@ -78,6 +84,14 @@ export default function PayrollRunView() {
   if (!run) return error ? <div className="error-banner">{error}</div> : <LoadingSpinner />;
 
   const draft = run.status === 'draft';
+  const status = RUN_STATUS[run.status] || { label: run.status, badge: 'badge-info' };
+  const canCheck = can('/payroll-checking', 'can_approve');
+  const canApprove = can('/payroll', 'can_approve');
+  const trail = [
+    run.prepared_by && `Prepared by ${run.prepared_by} ${displayDateTime(run.prepared_at)}`,
+    run.noted_by && `Noted by ${run.noted_by} ${displayDateTime(run.noted_at)}`,
+    run.approved_by && `Approved by ${run.approved_by} ${displayDateTime(run.approved_at)}`,
+  ].filter(Boolean);
   const totalSss = run.employees.reduce((s, e) => s + Number(e.sss_ee), 0);
   const totalPh = run.employees.reduce((s, e) => s + Number(e.philhealth_ee), 0);
   const totalHdmf = run.employees.reduce((s, e) => s + Number(e.pagibig_ee), 0);
@@ -93,19 +107,23 @@ export default function PayrollRunView() {
           </h1>
           <div className="muted">
             {run.cutoff === 1 ? '1st' : '2nd'} cutoff · Pay date {formatDate(run.pay_date)}
-            {' · '}{draft ? <span className="badge badge-info">Draft</span> : <span className="badge badge-success">Approved</span>}
-            {run.approved_by && ` by ${run.approved_by}`}
+            {' · '}<span className={`badge ${status.badge}`}>{status.label}</span>
             {run.notes && ` · ${run.notes}`}
           </div>
+          {trail.length > 0 && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{trail.join(' · ')}</div>}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button className="btn" onClick={() => navigate('/payroll')}>Back</button>
+          {run.employees.length > 0 && <button className="btn" onClick={() => window.open(`/payroll/${run.id}/print`, '_blank')}>Print Payroll</button>}
           {run.employees.length > 0 && <button className="btn" onClick={() => window.open(`/payroll/${run.id}/payslips/print`, '_blank')}>Print Payslips</button>}
           {run.employees.length > 0 && <button className="btn" onClick={exportCsv}>Export CSV</button>}
           {draft && can('/payroll', 'can_edit') && <button className="btn" disabled={!!busy} onClick={() => action('recompute')}>{busy === 'recompute' ? 'Computing…' : 'Recompute'}</button>}
           {draft && can('/payroll', 'can_delete') && <button className="btn btn-danger" disabled={!!busy} onClick={() => action('delete')}>Delete</button>}
-          {draft && can('/payroll', 'can_approve') && <button className="btn btn-primary" disabled={!!busy} onClick={() => action('approve')}>{busy === 'approve' ? 'Approving…' : 'Approve'}</button>}
-          {!draft && can('/payroll', 'can_approve') && <button className="btn" disabled={!!busy} onClick={() => action('reopen')}>Reopen</button>}
+          {draft && can('/payroll', 'can_edit') && <button className="btn btn-primary" disabled={!!busy} onClick={() => action('submit')}>{busy === 'submit' ? 'Submitting…' : 'Submit for Checking'}</button>}
+          {['for_checking', 'for_approval'].includes(run.status) && (canCheck || canApprove) && <button className="btn" disabled={!!busy} onClick={() => action('return')}>Return to Draft</button>}
+          {run.status === 'for_checking' && canCheck && <button className="btn btn-primary" disabled={!!busy} onClick={() => action('check')}>{busy === 'check' ? 'Saving…' : 'Mark as Checked'}</button>}
+          {run.status === 'for_approval' && canApprove && <button className="btn btn-primary" disabled={!!busy} onClick={() => action('approve')}>{busy === 'approve' ? 'Approving…' : 'Approve'}</button>}
+          {run.status === 'approved' && canApprove && <button className="btn" disabled={!!busy} onClick={() => action('reopen')}>Reopen</button>}
         </div>
       </div>
 

@@ -2,18 +2,18 @@ import { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import api from '../api/client';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { formatDate, formatPeriod, peso, qtyLabel } from '../utils/payroll';
+import PayrollSignatories from '../components/PayrollSignatories';
+import {
+  companyLogo, formatDate, formatPeriod, isSquareLogo, peso, qtyLabel, WU_LOGO,
+} from '../utils/payroll';
 
 // Printable payslips of a payroll run: every employee, or one (?employee_id=). Two slips to
 // an A4 page with a cut line between them, rendered without the app chrome. Opened in its own
 // tab from the run. A run that is not approved yet prints with a DRAFT mark.
 //
 // The header carries the company's logo, and every slip the Wu Ventures mark behind it
-// (public/payslip/, cropped from the logo files).
-const LOGOS = { CFT: '/payslip/cuts-for-tots.png', FAT: '/payslip/fresh-and-tidy.png' };
-const WU_LOGO = '/payslip/wu-ventures.png';
-const logoFor = (run) => LOGOS[run.company_code]
-  || (/cuts/i.test(run.company_name) ? LOGOS.CFT : /fresh/i.test(run.company_name) ? LOGOS.FAT : WU_LOGO);
+// (public/payslip/, cropped from the logo files). At the foot: who prepared, noted and approved
+// the run, and the employee's own received-by line.
 
 function Lines({ title, lines, totalLabel }) {
   const total = lines.reduce((s, l) => s + Number(l.amount), 0);
@@ -45,7 +45,7 @@ function Slip({ run, slip }) {
       {run.status !== 'approved' && <div className="slip-draft">DRAFT</div>}
       <header className="slip-head">
         <div className="slip-brand">
-          <img className={`slip-logo${logoFor(run) === LOGOS.FAT ? ' is-square' : ''}`} src={logoFor(run)} alt={run.company_name} />
+          <img className={`slip-logo${isSquareLogo(companyLogo(run)) ? ' is-square' : ''}`} src={companyLogo(run)} alt={run.company_name} />
           <div>
             <div className="slip-company">{run.company_name}</div>
             <div className="slip-title">PAYSLIP</div>
@@ -83,10 +83,7 @@ function Slip({ run, slip }) {
         <strong>₱ {peso(slip.net_pay)}</strong>
       </div>
 
-      <div className="slip-sign">
-        <div>Prepared by</div>
-        <div>Received by (signature over printed name) / Date</div>
-      </div>
+      <PayrollSignatories signatories={run.signatories} received />
     </section>
   );
 }

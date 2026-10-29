@@ -1,22 +1,53 @@
 const express = require('express');
 const pool = require('../db');
-const { requireAuth, requirePermission } = require('../middleware/auth');
+const { requireAuth, requirePermission, requireAnyPermission } = require('../middleware/auth');
 const { periodFor, computeRun } = require('../lib/payroll');
 const { isIsoDate } = require('../lib/attendance');
 
 const router = express.Router();
 const ROUTE = '/payroll';
+// A permission, not a screen: Approve on it lets a user check (note) a payroll.
+const CHECKING = '/payroll-checking';
 
 const RUN_SELECT = `
   SELECT r.id, r.company_id, c.name AS company_name, c.code AS company_code, r.cutoff, r.status,
          DATE_FORMAT(r.period_start, '%Y-%m-%d') AS period_start, DATE_FORMAT(r.period_end, '%Y-%m-%d') AS period_end,
          DATE_FORMAT(r.pay_date, '%Y-%m-%d') AS pay_date, r.employee_count, r.total_gross, r.total_deductions,
          r.total_net, r.total_employer, r.notes, r.warnings, r.computed_at, r.approved_at, r.created_at,
-         cu.display_name AS created_by, au.display_name AS approved_by
+         r.prepared_at, r.noted_at, r.prepared_by_user_id, r.noted_by_user_id, r.approved_by_user_id,
+         cu.display_name AS created_by, pu.display_name AS prepared_by, nu.display_name AS noted_by,
+         au.display_name AS approved_by
   FROM payroll_runs r
   JOIN companies c ON c.id = r.company_id
   LEFT JOIN users cu ON cu.id = r.created_by_user_id
+  LEFT JOIN users pu ON pu.id = r.prepared_by_user_id
+  LEFT JOIN users nu ON nu.id = r.noted_by_user_id
   LEFT JOIN users au ON au.id = r.approved_by_user_id`;
+
+// Prepared / Noted / Approved By for the printouts: the user who did each step, by the name and
+// position on their employee profile ("MARY GRACE S. MOYA", "HR Assistant"), else their user name.
+async function signatories(run) {
+  const ids = [run.prepared_by_user_id, run.noted_by_user_id, run.approved_by_user_id].filter(Boolean);
+  const people = new Map();
+  if (ids.length) {
+    const [rows] = await pool.query(
+      `SELECT u.id, u.display_name, e.first_name, e.middle_initial, e.last_name, e.position_title
+       FROM users u LEFT JOIN employees e ON e.id = u.employee_id WHERE u.id IN (?)`,
+      [ids]
+    );
+    for (const r of rows) {
+      const mi = String(r.middle_initial || '').replace(/\.+$/, '').trim();
+      const name = r.first_name ? [r.first_name, mi && `${mi}.`, r.last_name].filter(Boolean).join(' ') : r.display_name;
+      people.set(r.id, { name, title: r.position_title || '' });
+    }
+  }
+  const who = (id, at) => (id && people.has(id) ? { ...people.get(id), at } : null);
+  return {
+    prepared: who(run.prepared_by_user_id, run.prepared_at),
+    noted: who(run.noted_by_user_id, run.noted_at),
+    approved: who(run.approved_by_user_id, run.approved_at),
+  };
+}
 
 const parseJson = (v) => { try { return v ? JSON.parse(v) : []; } catch { return []; } };
 
@@ -29,7 +60,11 @@ function conflict(message) {
 async function draftRun(id) {
   const [[run]] = await pool.query('SELECT id, status FROM payroll_runs WHERE id = ?', [id]);
   if (!run) { const e = new Error('Not found'); e.status = 404; throw e; }
-  if (run.status !== 'draft') throw conflict('This payroll is approved and locked. Reopen it to make changes.');
+  if (run.status !== 'draft') {
+    throw conflict(run.status === 'approved'
+      ? 'This payroll is approved and locked. Reopen it to make changes.'
+      : 'This payroll is out for checking / approval and locked. Return it to draft to make changes.');
+  }
   return run;
 }
 
@@ -131,6 +166,7 @@ router.get('/:id', requireAuth, requirePermission(ROUTE, 'can_view'), async (req
       warnings: parseJson(run.warnings),
       employees: employees.map((e) => ({ ...e, warnings: parseJson(e.warnings) })),
       adjustments,
+      signatories: await signatories(run),
     });
   } catch (err) {
     next(err);
@@ -189,7 +225,7 @@ router.get('/:id/payslips', requireAuth, requirePermission(ROUTE, 'can_view'), a
       [slips.map((s) => s.id)]
     ) : [[]];
     res.json({
-      run: { ...run, warnings: undefined },
+      run: { ...run, warnings: undefined, signatories: await signatories(run) },
       slips: slips.map((s) => ({ ...s, warnings: undefined, lines: lines.filter((l) => l.run_employee_id === s.id) })),
     });
   } catch (err) {
@@ -207,38 +243,66 @@ router.post('/:id/compute', requireAuth, requirePermission(ROUTE, 'can_edit'), a
   }
 });
 
-// Approving locks the run: nothing recomputes it, and its loan lines now count against the
-// loans' balances. It is recomputed first, so what is approved reflects attendance as it is now.
-router.post('/:id/approve', requireAuth, requirePermission(ROUTE, 'can_approve'), async (req, res, next) => {
+// The review: draft -> for_checking (Prepared) -> for_approval (Noted) -> approved. Each step
+// is one UPDATE guarded by the status it moves from, so two people clicking at once cannot both
+// win. Out of draft the run is locked: what the checker checked is what gets approved.
+async function moveRun(req, res, next, { from, to, set = '', params = [], error }) {
+  try {
+    const [result] = await pool.query(
+      `UPDATE payroll_runs SET status = ?${set}, updated_at = NOW() WHERE id = ? AND status IN (?)`,
+      [to, ...params, req.params.id, from]
+    );
+    if (!result.affectedRows) {
+      const [[exists]] = await pool.query('SELECT id FROM payroll_runs WHERE id = ?', [req.params.id]);
+      return res.status(exists ? 409 : 404).json({ error: exists ? error : 'Not found' });
+    }
+    const [[run]] = await pool.query(`${RUN_SELECT} WHERE r.id = ?`, [req.params.id]);
+    return res.json({ ...run, warnings: parseJson(run.warnings) });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+// Prepared: HR sends the draft for checking, recomputed one last time.
+router.post('/:id/submit', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
   try {
     await draftRun(req.params.id);
     await computeRun(req.params.id);
-    await pool.query(
-      "UPDATE payroll_runs SET status = 'approved', approved_by_user_id = ?, approved_at = NOW(), updated_at = NOW() WHERE id = ? AND status = 'draft'",
-      [req.user.id, req.params.id]
-    );
-    const [[run]] = await pool.query(`${RUN_SELECT} WHERE r.id = ?`, [req.params.id]);
-    res.json({ ...run, warnings: parseJson(run.warnings) });
   } catch (err) {
-    next(err);
+    return next(err);
   }
+  return moveRun(req, res, next, {
+    from: ['draft'], to: 'for_checking', set: ', prepared_by_user_id = ?, prepared_at = NOW()', params: [req.user.id],
+    error: 'Only a draft payroll can be submitted for checking.',
+  });
 });
 
-// Back to draft, e.g. to fix a mistake found after approval. Its loan deductions stop counting
-// against the balances until it is approved again.
-router.post('/:id/reopen', requireAuth, requirePermission(ROUTE, 'can_approve'), async (req, res, next) => {
-  try {
-    const [result] = await pool.query(
-      "UPDATE payroll_runs SET status = 'draft', approved_by_user_id = NULL, approved_at = NULL, updated_at = NOW() WHERE id = ? AND status = 'approved'",
-      [req.params.id]
-    );
-    if (!result.affectedRows) return res.status(409).json({ error: 'Only an approved payroll can be reopened.' });
-    const [[run]] = await pool.query(`${RUN_SELECT} WHERE r.id = ?`, [req.params.id]);
-    res.json({ ...run, warnings: parseJson(run.warnings) });
-  } catch (err) {
-    next(err);
-  }
-});
+// Noted: a checker (Approve on Payroll Checking) marks it checked.
+router.post('/:id/check', requireAuth, requirePermission(CHECKING, 'can_approve'), (req, res, next) => moveRun(req, res, next, {
+  from: ['for_checking'], to: 'for_approval', set: ', noted_by_user_id = ?, noted_at = NOW()', params: [req.user.id],
+  error: 'Only a payroll waiting for checking can be marked checked.',
+}));
+
+// Approved: locks it for good, and its loan lines now count against the loans' balances.
+router.post('/:id/approve', requireAuth, requirePermission(ROUTE, 'can_approve'), (req, res, next) => moveRun(req, res, next, {
+  from: ['for_approval'], to: 'approved', set: ', approved_by_user_id = ?, approved_at = NOW()', params: [req.user.id],
+  error: 'A payroll is approved after it has been checked (Noted By).',
+}));
+
+// Back to draft from checking or approval, to fix something found there.
+router.post('/:id/return', requireAuth, requireAnyPermission([ROUTE, CHECKING], 'can_approve'), (req, res, next) => moveRun(req, res, next, {
+  from: ['for_checking', 'for_approval'], to: 'draft',
+  set: ', prepared_by_user_id = NULL, prepared_at = NULL, noted_by_user_id = NULL, noted_at = NULL',
+  error: 'Only a payroll out for checking or approval can be returned to draft.',
+}));
+
+// An approved payroll back to draft, e.g. to fix a mistake found after approval. Its loan
+// deductions stop counting against the balances until it is approved again.
+router.post('/:id/reopen', requireAuth, requirePermission(ROUTE, 'can_approve'), (req, res, next) => moveRun(req, res, next, {
+  from: ['approved'], to: 'draft',
+  set: ', prepared_by_user_id = NULL, prepared_at = NULL, noted_by_user_id = NULL, noted_at = NULL, approved_by_user_id = NULL, approved_at = NULL',
+  error: 'Only an approved payroll can be reopened.',
+}));
 
 router.delete('/:id', requireAuth, requirePermission(ROUTE, 'can_delete'), async (req, res, next) => {
   try {

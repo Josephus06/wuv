@@ -5,7 +5,7 @@ import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { formatDate, formatPeriod, peso, standardPeriod } from '../utils/payroll';
+import { formatDate, formatPeriod, peso, RUN_STATUS, standardPeriod } from '../utils/payroll';
 
 // The cutoff that most likely needs running now: the one that just ended.
 function suggestedCutoff() {
@@ -98,7 +98,7 @@ export default function Payroll() {
       label: 'Status',
       render: (r) => (
         <>
-          {r.status === 'approved' ? <span className="badge badge-success">Approved</span> : <span className="badge badge-info">Draft</span>}
+          <span className={`badge ${RUN_STATUS[r.status]?.badge || 'badge-info'}`}>{RUN_STATUS[r.status]?.label || r.status}</span>
           {r.warnings?.length > 0 && <span className="badge badge-warning" style={{ marginLeft: 6 }} title={r.warnings.join('\n')}>{r.warnings.length} note{r.warnings.length > 1 ? 's' : ''}</span>}
         </>
       ),
@@ -195,7 +195,7 @@ export default function Payroll() {
             </div>
             <p className="muted">
               Computes every employee of the company from their attendance, pay rate, allowances and loans.
-              It stays a draft you can review, adjust and recompute until it is approved.
+              It stays a draft you can review, adjust and recompute until you submit it for checking.
             </p>
             <div className="modal-actions">
               <button type="button" className="btn" onClick={() => setCreating(null)}>Cancel</button>

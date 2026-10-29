@@ -60,3 +60,20 @@ export function csvDownload(filename, header, rows) {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// A payroll run's review status: draft -> for checking (Prepared) -> for approval (Noted) -> approved.
+export const RUN_STATUS = {
+  draft: { label: 'Draft', badge: 'badge-info' },
+  for_checking: { label: 'For Checking', badge: 'badge-warning' },
+  for_approval: { label: 'For Approval', badge: 'badge-warning' },
+  approved: { label: 'Approved', badge: 'badge-success' },
+};
+
+// The company's logo for a printout; Wu Ventures' for any other company.
+export const WU_LOGO = '/payslip/wu-ventures.png';
+const LOGOS = { CFT: '/payslip/cuts-for-tots.png', FAT: '/payslip/fresh-and-tidy.png' };
+export function companyLogo(run) {
+  return LOGOS[run.company_code]
+    || (/cuts/i.test(run.company_name) ? LOGOS.CFT : /fresh/i.test(run.company_name) ? LOGOS.FAT : WU_LOGO);
+}
+export const isSquareLogo = (src) => src === LOGOS.FAT;

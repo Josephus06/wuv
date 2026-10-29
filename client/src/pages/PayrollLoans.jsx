@@ -233,7 +233,7 @@ export default function PayrollLoans() {
                   <tr key={p.run_id}>
                     <td>{formatPeriod(p.period_start, p.period_end)}</td>
                     <td>{formatDate(p.pay_date)}</td>
-                    <td>{p.status === 'approved' ? <span className="badge badge-success">Approved</span> : <span className="badge badge-info">Draft — not counted yet</span>}</td>
+                    <td>{p.status === 'approved' ? <span className="badge badge-success">Approved</span> : <span className="badge badge-info">Not approved — not counted yet</span>}</td>
                     <td className="num">{peso(p.amount)}</td>
                   </tr>
                 ))}

@@ -51,6 +51,7 @@ const PAGES = [
   { route: '/schedule',                       name: 'Schedule',                    module: 'HR' },
   { route: '/kiosk-devices',                  name: 'Time Clock Devices',          module: 'HR' },
   { route: '/payroll',                        name: 'Payroll',                     module: 'HR' },
+  { route: '/payroll-checking',               name: 'Payroll Checking',            module: 'HR' },
   { route: '/payroll-settings',               name: 'Payroll Settings',            module: 'HR' },
   { route: '/payroll-holidays',               name: 'Holidays',                    module: 'HR' },
   { route: '/payroll-pay-items',              name: 'Allowances & Deductions',     module: 'HR' },
