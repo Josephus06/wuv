@@ -7,6 +7,13 @@ import { formatDate, formatPeriod, peso, qtyLabel } from '../utils/payroll';
 // Printable payslips of a payroll run: every employee, or one (?employee_id=). Two slips to
 // an A4 page with a cut line between them, rendered without the app chrome. Opened in its own
 // tab from the run. A run that is not approved yet prints with a DRAFT mark.
+//
+// The header carries the company's logo, and every slip the Wu Ventures mark behind it
+// (public/payslip/, cropped from the logo files).
+const LOGOS = { CFT: '/payslip/cuts-for-tots.png', FAT: '/payslip/fresh-and-tidy.png' };
+const WU_LOGO = '/payslip/wu-ventures.png';
+const logoFor = (run) => LOGOS[run.company_code]
+  || (/cuts/i.test(run.company_name) ? LOGOS.CFT : /fresh/i.test(run.company_name) ? LOGOS.FAT : WU_LOGO);
 
 function Lines({ title, lines, totalLabel }) {
   const total = lines.reduce((s, l) => s + Number(l.amount), 0);
@@ -34,11 +41,15 @@ function Slip({ run, slip }) {
   const otHours = Math.round(slip.overtime_minutes / 6) / 10;
   return (
     <section className="slip">
+      <img className="slip-watermark" src={WU_LOGO} alt="" />
       {run.status !== 'approved' && <div className="slip-draft">DRAFT</div>}
       <header className="slip-head">
-        <div>
-          <div className="slip-company">{run.company_name}</div>
-          <div className="slip-title">PAYSLIP</div>
+        <div className="slip-brand">
+          <img className={`slip-logo${logoFor(run) === LOGOS.FAT ? ' is-square' : ''}`} src={logoFor(run)} alt={run.company_name} />
+          <div>
+            <div className="slip-company">{run.company_name}</div>
+            <div className="slip-title">PAYSLIP</div>
+          </div>
         </div>
         <div className="slip-period">
           <div><span>Period</span> {formatPeriod(run.period_start, run.period_end)}</div>

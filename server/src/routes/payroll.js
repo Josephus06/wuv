@@ -8,7 +8,7 @@ const router = express.Router();
 const ROUTE = '/payroll';
 
 const RUN_SELECT = `
-  SELECT r.id, r.company_id, c.name AS company_name, r.cutoff, r.status,
+  SELECT r.id, r.company_id, c.name AS company_name, c.code AS company_code, r.cutoff, r.status,
          DATE_FORMAT(r.period_start, '%Y-%m-%d') AS period_start, DATE_FORMAT(r.period_end, '%Y-%m-%d') AS period_end,
          DATE_FORMAT(r.pay_date, '%Y-%m-%d') AS pay_date, r.employee_count, r.total_gross, r.total_deductions,
          r.total_net, r.total_employer, r.notes, r.warnings, r.computed_at, r.approved_at, r.created_at,

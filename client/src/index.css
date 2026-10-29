@@ -2097,6 +2097,14 @@ tr.clickable:hover td { background: var(--accent-bg); }
   padding: 22px 28px; border-radius: 6px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
   font-size: 11px; line-height: 1.35;
 }
+.slip > :not(.slip-watermark):not(.slip-draft) { position: relative; z-index: 1; }
+.slip-watermark {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 85%; max-width: 660px; opacity: 0.12; pointer-events: none; z-index: 0;
+}
+.slip-brand { display: flex; align-items: center; gap: 14px; }
+.slip-logo { height: 76px; max-width: 240px; object-fit: contain; }
+.slip-logo.is-square { height: 104px; }
 .slip-draft {
   position: absolute; top: 42%; left: 50%; transform: translate(-50%, -50%) rotate(-18deg);
   font-size: 90px; font-weight: 900; letter-spacing: 0.2em; color: rgba(185, 28, 28, 0.1); pointer-events: none;
@@ -2111,7 +2119,7 @@ tr.clickable:hover td { background: var(--accent-bg); }
 .slip-info dd { margin: 0; border-bottom: 1px solid #ccc; min-height: 15px; }
 .slip-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
 .slip-lines { width: 100%; border-collapse: collapse; }
-.slip-lines th, .slip-lines td { padding: 2px 4px; text-align: left; color: #222; background: #fff; font-size: 10.5px; }
+.slip-lines th, .slip-lines td { padding: 2px 4px; text-align: left; color: #222; background: transparent; font-size: 10.5px; }
 .slip-lines thead th { border-bottom: 1px solid #555; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
 .slip-lines tfoot th { border-top: 1px solid #555; font-weight: 700; }
 .slip-lines .num { text-align: right; white-space: nowrap; }
@@ -2130,5 +2138,6 @@ tr.clickable:hover td { background: var(--accent-bg); }
   .slip { box-shadow: none; border-radius: 0; max-width: none; margin: 0; padding: 4mm 2mm; break-inside: avoid; }
   .slip:nth-of-type(2n) { border-top: 1px dashed #888; margin-top: 4mm; padding-top: 8mm; }
   .slip:nth-of-type(2n):not(:last-of-type) { break-after: page; }
-  .slip-draft { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html, body { background: #fff !important; }
+  .slip-draft, .slip-watermark, .slip-logo { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
