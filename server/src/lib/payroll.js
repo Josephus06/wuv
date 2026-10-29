@@ -13,10 +13,10 @@
 //     rest day earns the full multiplier (the basic never covered it). Absences, lateness and
 //     undertime come off at the daily / per-minute rate -- unless the profile says Compute
 //     Absences = No.
-//   Daily-paid: an ordinary day worked is paid as a whole day -- or half a day when less than
-//     half of it was worked -- and the lateness and undertime of a whole day come off on their
-//     own lines at the per-minute rate. Other days (rest day, holiday) are paid for the hours
-//     actually worked, at the day's multiplier. An unworked
+//   Daily-paid: the hours worked on ordinary days (lateness and undertime already out of them)
+//     are counted in days, and the cutoff's total is rounded DOWN to a half day -- 12.78 days
+//     pays 12.5, 12.45 pays 12. Other days (rest day, holiday) are paid for the hours actually
+//     worked, at the day's multiplier. An unworked
 //     regular holiday is still paid one day, if the employee was not absent on the last
 //     scheduled day before it (the Labor Code's condition).
 //
@@ -219,9 +219,7 @@ function computeEmployee(emp, comp, ctx) {
   let undertimeMin = 0;
   let otMinTotal = 0;
   let nightMinTotal = 0;
-  let dailyDays = 0; // daily-paid: ordinary days worked, 1 or 0.5 each
-  let dailyLateMin = 0; // ... and the lateness / undertime of the whole ones
-  let dailyUndertimeMin = 0;
+  let dailyBasicMin = 0; // daily-paid: regular minutes on ordinary days
   let unworkedHolidays = 0;
   const premium = {}; // kind -> { minutes, amount }
   const overtime = {};
@@ -273,19 +271,7 @@ function computeEmployee(emp, comp, ctx) {
         if (!scheduled) bump(premium, kind, regMin, (regMin / 60) * hourly * mult);
         else if (mult > 1) bump(premium, kind, regMin, (regMin / 60) * hourly * (mult - 1));
       } else if (kind === 'ordinary') {
-        if (regMin <= 0) {
-          warnings.push(`${date}: timed in and out with no working time -- not paid for that day.`);
-        } else if (regMin < fullDayMin / 2) {
-          dailyDays += 0.5;
-        } else {
-          dailyDays += 1;
-          if (log.scheduled_start && log.scheduled_end) {
-            dailyLateMin += log.late_minutes;
-            dailyUndertimeMin += log.undertime_minutes;
-          } else {
-            dailyUndertimeMin += fullDayMin - regMin; // no schedule to measure against: the short hours
-          }
-        }
+        dailyBasicMin += regMin;
       } else {
         bump(premium, kind, regMin, (regMin / 60) * hourly * mult);
       }
@@ -324,9 +310,9 @@ function computeEmployee(emp, comp, ctx) {
     }
     add({ line_type: 'earning', code: 'NOT_EMPLOYED', label: 'Days before hire / after separation', quantity: daysNotEmployed, unit: 'day', rate: daily, amount: -daysNotEmployed * daily });
   } else {
-    add({ line_type: 'earning', code: 'BASIC', label: 'Basic pay', quantity: dailyDays, unit: 'day', rate: daily, amount: dailyDays * daily });
-    add({ line_type: 'earning', code: 'LATE', label: 'Late', quantity: dailyLateMin, unit: 'min', rate: perMinute, amount: -dailyLateMin * perMinute });
-    add({ line_type: 'earning', code: 'UNDERTIME', label: 'Undertime', quantity: dailyUndertimeMin, unit: 'min', rate: perMinute, amount: -dailyUndertimeMin * perMinute });
+    // Whole and half days only, rounded down (the small epsilon keeps 12.5 from becoming 12).
+    const days = Math.floor((dailyBasicMin / fullDayMin) * 2 + 1e-9) / 2;
+    add({ line_type: 'earning', code: 'BASIC', label: 'Basic pay', quantity: days, unit: 'day', rate: daily, amount: days * daily });
     add({ line_type: 'earning', code: 'HOLIDAY_PAY', label: 'Regular holiday pay (unworked)', quantity: unworkedHolidays, unit: 'day', rate: daily, amount: unworkedHolidays * daily });
   }
   for (const [kind, v] of Object.entries(premium)) {
