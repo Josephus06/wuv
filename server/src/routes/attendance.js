@@ -433,7 +433,7 @@ const sheetUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize
 router.post('/import/preview', requireAuth, requirePermission(ROUTE, 'can_add'), sheetUpload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Attach the attendance sheet (.xlsx).' });
-    const rows = parseAttendanceSheet(readFirstSheet(req.file.buffer));
+    const rows = parseAttendanceSheet(readFirstSheet(req.file.buffer), { fileName: req.file.originalname });
     if (!rows.length) return res.status(400).json({ error: 'No attendance rows found under the headings.' });
 
     const [employees] = await pool.query(

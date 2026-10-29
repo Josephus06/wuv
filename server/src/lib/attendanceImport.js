@@ -39,12 +39,32 @@ function findHeader(rows) {
   return null;
 }
 
-function toDate(v, date1904) {
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const iso = (y, m, d) => {
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null; // e.g. Feb-30
+  return dt.toISOString().slice(0, 10);
+};
+const monthOf = (name) => {
+  const i = MONTHS.indexOf(String(name).slice(0, 3).toLowerCase());
+  return i < 0 ? null : i + 1;
+};
+
+// A date cell: an Excel date, or text. Text with no year ("Oct-12", "12-Oct", "10/12") takes
+// `year` -- from the file name, else this year. Text is never handed to Date.parse: that reads
+// "Oct-12" as October 2012.
+function toDate(v, date1904, year) {
   if (typeof v === 'number') return excelDate(v, date1904);
   const s = String(v || '').trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const t = Date.parse(s);
-  return Number.isNaN(t) ? null : new Date(t - new Date(t).getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) return iso(+m[1], +m[2], +m[3]);
+  m = s.match(/^([a-z]{3,9})\.?[\s-]*(\d{1,2})(?:,?[\s-]*(\d{4}))?$/i); // Oct-12, Oct 12, October 12, 2026
+  if (m && monthOf(m[1])) return iso(m[3] ? +m[3] : year, monthOf(m[1]), +m[2]);
+  m = s.match(/^(\d{1,2})[\s-]*([a-z]{3,9})\.?(?:[\s-]*(\d{4}))?$/i); // 12-Oct, 12 Oct 2026
+  if (m && monthOf(m[2])) return iso(m[3] ? +m[3] : year, monthOf(m[2]), +m[1]);
+  m = s.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?$/); // 10/12, 10/12/2026 (month first)
+  if (m) return iso(m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : year, +m[1], +m[2]);
+  return null;
 }
 
 // "HH:MM" from an Excel time or text like "9:33 AM", "21:00", "13:00 PM", "12:00 NN".
@@ -67,7 +87,9 @@ const toMin = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + 
 const span = (a, b) => { const d = toMin(b) - toMin(a); return d < 0 ? d + 1440 : d; };
 
 // Sheet rows -> merged day rows with flags. Matching to employees and shifts happens after.
-function parseAttendanceSheet({ rows, date1904 }) {
+function parseAttendanceSheet({ rows, date1904 }, { fileName = '', today = new Date() } = {}) {
+  const yearInName = String(fileName).match(/\b(20\d{2})\b/);
+  const year = yearInName ? Number(yearInName[1]) : today.getFullYear();
   const header = findHeader(rows);
   if (!header) {
     const e = new Error('Could not find the column headings (Name, Date, Shift, Time In, Time Out ...) in the first rows of the sheet.');
@@ -75,6 +97,16 @@ function parseAttendanceSheet({ rows, date1904 }) {
     throw e;
   }
   const { cols } = header;
+
+  // "Oct-12" typed into Excel is stored as October 2012 (shown as mmm-yy), and dragging it down
+  // adds a year at a time (the day drifts: 2013-10-02, 2014-10-03 ...). An attendance sheet never
+  // spans three years, so one whose dates do is that: the two-digit year is the day.
+  const raw = rows.filter((r) => r.row > header.headerRow && r.cells[cols.date] !== undefined)
+    .map((r) => toDate(r.cells[cols.date], date1904, year)).filter(Boolean);
+  const monthYear = new Set(raw.map((d) => d.slice(0, 4))).size >= 3
+    && raw.every((d) => Number(d.slice(0, 4)) >= 2001 && Number(d.slice(0, 4)) <= 2031);
+  const fixDate = (d) => (monthYear && d ? iso(year, Number(d.slice(5, 7)), Number(d.slice(2, 4))) : d);
+
   const days = new Map();
   let name = null;
   for (const r of rows) {
@@ -82,7 +114,7 @@ function parseAttendanceSheet({ rows, date1904 }) {
     const c = (key) => (cols[key] ? r.cells[cols[key]] : undefined);
     if (c('name')) name = String(c('name')).trim();
     if (!c('date')) continue; // a total row, or blank
-    const date = toDate(c('date'), date1904);
+    const date = fixDate(toDate(c('date'), date1904, year));
     if (!name || !date) continue;
     const key = `${norm(name)}|${date}`;
     if (!days.has(key)) {
@@ -103,8 +135,15 @@ function parseAttendanceSheet({ rows, date1904 }) {
     if (c('overtime') !== undefined && Number.isFinite(otH)) d.overtime_hours = (d.overtime_hours || 0) + otH;
   }
 
+  // A date far from the rest of the sheet is a misread or a typo (a wrong year): never import it
+  // without HR looking.
+  const sorted = [...days.values()].map((d) => d.date).sort();
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const daysFrom = (a, b) => Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000;
+
   return [...days.values()].map((d) => {
     const flags = [];
+    if (median && daysFrom(d.date, median) > 40) flags.push({ level: 'error', text: `Date ${d.date} is far from the rest of the sheet (around ${median})` });
     const rest = /\brest\b|\boff\b/.test(norm(d.sheet_shift));
     const otFromTimes = d.ot.reduce((s, o) => s + span(o.start, o.end), 0);
     // The Overtime column is the approved figure; OT times only back it up.
@@ -172,7 +211,38 @@ function matchShift(sheetShift, shifts) {
   const same = shifts.filter((s) => [...words(s.name)].sort().join(' ') === key);
   if (same.length === 1) return same[0].id;
   const contains = shifts.filter((s) => want.every((w) => words(s.name).includes(w)));
-  return contains.length === 1 ? contains[0].id : null;
+  if (contains.length === 1) return contains[0].id;
+  // Abbreviated branch: "Opening - CMTM" is "CMT Mandaue - Opening" (CMT + M), "CMTG" CMT
+  // Guadalupe. Every word of the shift's name has to be accounted for.
+  const abbreviated = shifts.filter((s) => coversName(want, words(s.name)));
+  return abbreviated.length === 1 ? abbreviated[0].id : null;
 }
 
-module.exports = { parseAttendanceSheet, matchEmployee, matchShift, toTime, span };
+// Whether the sheet's words spell out every word of the name: each sheet word is a word of the
+// name, or the starts of consecutive words run together ("cmtm" = "cmt" + "m"andaue).
+function coversName(sheetWords, nameWords) {
+  const used = new Set();
+  // Indexes of the words `token` spells from word i on, or null.
+  const spell = (token, i) => {
+    if (!token) return [];
+    if (i >= nameWords.length) return null;
+    for (let n = Math.min(token.length, nameWords[i].length); n >= 1; n -= 1) {
+      if (nameWords[i].slice(0, n) !== token.slice(0, n)) continue;
+      const rest = spell(token.slice(n), i + 1);
+      if (rest) return [i, ...rest];
+    }
+    return null;
+  };
+  for (const t of sheetWords) {
+    let hit = null;
+    for (let i = 0; i < nameWords.length && !hit; i += 1) {
+      const run = spell(t, i);
+      if (run && (run.length > 1 || nameWords[i] === t)) hit = run;
+    }
+    if (!hit) return false;
+    hit.forEach((i) => used.add(i));
+  }
+  return used.size === nameWords.length;
+}
+
+module.exports = { parseAttendanceSheet, matchEmployee, matchShift, toTime, toDate, span };
