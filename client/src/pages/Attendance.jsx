@@ -96,6 +96,23 @@ export default function Attendance() {
     setError('');
   }
 
+  // Measures the records in the current filters again against today's shift settings (after
+  // a shift's hours or rules were corrected). Stamped times stay as they are.
+  async function remeasure() {
+    const range = filters.from === filters.to ? formatDate(filters.from) : `${formatDate(filters.from)} – ${formatDate(filters.to)}`;
+    const scope = filters.employee_id || filters.company_id || filters.branch_id || filters.department_id ? 'the filtered employees' : 'everyone';
+    if (!confirm(`Re-measure the time records of ${scope} for ${range} against the shifts as they are set now?\n\nThe stamped times are kept; late, undertime, overtime and worked are recalculated. Days in a payroll already out for checking or approved are skipped.`)) return;
+    setLoadError('');
+    try {
+      const params = Object.fromEntries(Object.entries(filters).filter(([, v]) => v));
+      const { data } = await api.post('/attendance/remeasure', params);
+      alert(`${data.remeasured} record(s) re-measured.${data.locked ? ` ${data.locked} skipped: already in a payroll out for checking or approved.` : ''}`);
+      load();
+    } catch (err) {
+      setLoadError(err.response?.data?.error || 'Could not re-measure');
+    }
+  }
+
   function openEdit(row) {
     setForm({
       time_in: toInputValue(row.time_in_local), time_out: toInputValue(row.time_out_local), remarks: row.remarks || '',
@@ -237,6 +254,7 @@ export default function Attendance() {
           {can('/attendance', 'can_add') && <button className="btn" onClick={() => window.location.assign('/attendance/import')}>Import</button>}
           <button className="btn" onClick={openDtr}>Print DTR</button>
           {rows.length > 0 && <button className="btn" onClick={exportCsv}>Export CSV</button>}
+          {can('/attendance', 'can_edit') && <button className="btn" onClick={remeasure}>Re-measure</button>}
           {can('/attendance', 'can_add') && <button className="btn btn-primary" onClick={() => openAdd(null)}>Add Record</button>}
         </div>
       </div>

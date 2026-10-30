@@ -621,6 +621,44 @@ router.post('/import', requireAuth, requirePermission(ROUTE, 'can_add'), async (
   }
 });
 
+// Re-measure: the records of a date range measured again against the schedules as they are
+// NOW -- after a shift's hours or rules were corrected (8:15-4:45 -> 8:00-5:00 with grace).
+// The stamped times are kept; only the schedule snapshot and late / undertime / overtime /
+// worked change. Days already in a payroll out of draft (for checking, approval, approved)
+// are left alone, so attendance keeps matching what was checked and paid.
+router.post('/remeasure', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
+  try {
+    const { from, to } = req.body;
+    if (!isIsoDate(from) || !isIsoDate(to) || from > to) return res.status(400).json({ error: 'Choose a valid date range' });
+    const days = Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1;
+    if (days > MAX_REPORT_DAYS) return res.status(400).json({ error: `Pick a range of at most ${MAX_REPORT_DAYS} days` });
+
+    const where = ['l.work_date BETWEEN ? AND ?'];
+    const params = [from, to];
+    for (const [key, col] of [['employee_id', 'e.id'], ['company_id', 'e.company_id'], ['branch_id', 'e.branch_id'], ['department_id', 'e.department_id']]) {
+      if (req.body[key]) { where.push(`${col} = ?`); params.push(req.body[key]); }
+    }
+    const [logs] = await pool.query(
+      `SELECT l.employee_id, DATE_FORMAT(l.work_date, '%Y-%m-%d') AS work_date,
+              EXISTS (SELECT 1 FROM payroll_run_employees pe JOIN payroll_runs r ON r.id = pe.run_id
+                      WHERE pe.employee_id = l.employee_id AND r.status <> 'draft'
+                        AND l.work_date BETWEEN r.period_start AND r.period_end) AS locked
+       FROM attendance_logs l JOIN employees e ON e.id = l.employee_id
+       WHERE ${where.join(' AND ')}`,
+      params
+    );
+    let remeasured = 0;
+    let locked = 0;
+    for (const log of logs) {
+      if (log.locked) { locked += 1; continue; }
+      if (await remeasureDay(log.employee_id, log.work_date)) remeasured += 1;
+    }
+    res.json({ remeasured, locked });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.delete('/:id', requireAuth, requirePermission(ROUTE, 'can_delete'), async (req, res, next) => {
   try {
     await pool.query('DELETE FROM attendance_logs WHERE id = ?', [req.params.id]);
