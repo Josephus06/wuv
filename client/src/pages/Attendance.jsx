@@ -319,7 +319,7 @@ export default function Attendance() {
             actions={(row) => (
               <>
                 {row.log_id && can('/attendance', 'can_edit') && <button className="btn btn-sm" onClick={() => openEdit(row)}>Edit</button>}
-                {!row.log_id && row.status === 'Absent' && can('/attendance', 'can_add') && (
+                {!row.log_id && can('/attendance', 'can_add') && (
                   <button className="btn btn-sm" onClick={() => openAdd(row)}>Add Record</button>
                 )}
               </>
