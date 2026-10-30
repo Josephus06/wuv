@@ -113,10 +113,19 @@ function isOvernight(shift) {
 
 // A shift's start and end as UTC instants for a given work date. An overnight shift
 // (22:00-06:00) ends on the following calendar day but still belongs to the date it began.
+// A stamped lunch (lunch_start / lunch_end) falls on the next calendar day when it is earlier in
+// the day than the shift's start (an overnight shift's lunch after midnight).
 function scheduleFor(workDate, shift) {
   const start = localToUtc(workDate, shift.start_time);
   const end = localToUtc(isOvernight(shift) ? addDays(workDate, 1) : workDate, shift.end_time);
-  return { start, end };
+  if (!shift.lunch_start || !shift.lunch_end) return { start, end, lunchStart: null, lunchEnd: null };
+  const lunchDate = (t) => (t < shift.start_time ? addDays(workDate, 1) : workDate);
+  return {
+    start,
+    end,
+    lunchStart: localToUtc(lunchDate(shift.lunch_start), shift.lunch_start),
+    lunchEnd: localToUtc(lunchDate(shift.lunch_end), shift.lunch_end),
+  };
 }
 
 // The assignment that governs one employee's day: of the assignments covering the date AND
@@ -133,7 +142,8 @@ function pickAssignment(assignments, workDate) {
 }
 
 const SHIFT_FIELDS = `s.name AS shift_name, s.start_time, s.end_time, s.grace_minutes, s.break_minutes,
-         COALESCE(s.paid_break_minutes, 0) AS paid_break_minutes`;
+         COALESCE(s.paid_break_minutes, 0) AS paid_break_minutes, s.lunch_start, s.lunch_end,
+         s.late_block_minutes, s.halfday_late_minutes, COALESCE(s.undertime_grace_minutes, 0) AS undertime_grace_minutes`;
 
 const ASSIGNMENT_SELECT = `
   SELECT a.id AS assignment_id, a.employee_id, a.shift_id,
@@ -216,18 +226,47 @@ function minutesBetween(a, b) {
 // spans more than the break itself; paid-break minutes (the 15-minute breaks outside Shift
 // In / Out) are added back. A record with no schedule (unscheduled day) still gets its worked
 // time; the schedule-relative figures stay zero.
-function computeMetrics({ timeIn, timeOut, scheduledStart, scheduledEnd, graceMinutes = 0, breakMinutes = 0, paidBreakMinutes = 0 }) {
+//
+// A shift can be stricter (see db/add-shift-lunch.js):
+//   lunch stamps     back from lunch after lunchEnd is late too (no grace); out to lunch
+//                    before lunchStart is undertime. Worked time is the two halves.
+//   lateBlock        late counts from the END of the grace period and goes up in blocks:
+//                    8:20 on a 15-minute grace is 5 minutes -> 30; 46 minutes -> 60.
+//   halfdayLate      late this much or more, in the morning or after lunch, is half a day
+//                    absent (halfday_absent) instead of late minutes.
+//   undertimeGrace   leaving this close to the end is not undertime; earlier counts from
+//                    that point (4:40 on a 5:00 end with 15 minutes is 5 minutes).
+function computeMetrics({
+  timeIn, timeOut, scheduledStart, scheduledEnd, graceMinutes = 0, breakMinutes = 0, paidBreakMinutes = 0,
+  lunchStart = null, lunchEnd = null, lunchOut = null, lunchIn = null,
+  lateBlockMinutes = null, halfdayLateMinutes = null, undertimeGraceMinutes = 0,
+}) {
+  const blocks = lateBlockMinutes > 0;
+  let halfday = false;
+  const penalize = (minutes) => {
+    if (minutes <= 0) return 0;
+    if (halfdayLateMinutes > 0 && minutes >= halfdayLateMinutes && !halfday) { halfday = true; return 0; }
+    return blocks ? Math.ceil(minutes / lateBlockMinutes) * lateBlockMinutes : minutes;
+  };
   const lateRaw = scheduledStart ? minutesBetween(scheduledStart, timeIn) : 0;
-  const late = lateRaw > graceMinutes ? lateRaw : 0;
+  let late = penalize(lateRaw > graceMinutes ? (blocks ? lateRaw - graceMinutes : lateRaw) : 0);
+  if (lunchEnd && lunchIn) late += penalize(minutesBetween(lunchEnd, lunchIn));
   if (!timeOut) {
-    return { late_minutes: late, undertime_minutes: 0, overtime_minutes: 0, worked_minutes: 0 };
+    return { late_minutes: late, undertime_minutes: 0, overtime_minutes: 0, worked_minutes: 0, halfday_absent: halfday };
   }
   const span = Math.max(0, minutesBetween(timeIn, timeOut));
+  const endGap = scheduledEnd ? minutesBetween(timeOut, scheduledEnd) : 0;
+  let undertime = endGap > undertimeGraceMinutes ? endGap - undertimeGraceMinutes : 0;
+  if (lunchStart && lunchOut) undertime += Math.max(0, minutesBetween(lunchOut, lunchStart));
+  const worked = lunchOut && lunchIn && lunchIn > lunchOut && timeOut > lunchIn
+    ? minutesBetween(timeIn, lunchOut) + minutesBetween(lunchIn, timeOut) + paidBreakMinutes
+    : (span > breakMinutes ? span - breakMinutes : span) + (span > breakMinutes ? paidBreakMinutes : 0);
   return {
     late_minutes: late,
-    undertime_minutes: scheduledEnd ? Math.max(0, minutesBetween(timeOut, scheduledEnd)) : 0,
+    undertime_minutes: undertime,
     overtime_minutes: scheduledEnd ? Math.max(0, minutesBetween(scheduledEnd, timeOut)) : 0,
-    worked_minutes: (span > breakMinutes ? span - breakMinutes : span) + (span > breakMinutes ? paidBreakMinutes : 0),
+    worked_minutes: Math.max(0, worked),
+    halfday_absent: halfday,
   };
 }
 
@@ -242,10 +281,16 @@ function scheduleSnapshot(schedule) {
     grace_minutes: schedule ? schedule.grace_minutes : 0,
     break_minutes: schedule ? schedule.break_minutes : 0,
     paid_break_minutes: schedule ? schedule.paid_break_minutes || 0 : 0,
+    scheduled_lunch_start: schedule?.lunchStart ? toDbUtc(schedule.lunchStart) : null,
+    scheduled_lunch_end: schedule?.lunchEnd ? toDbUtc(schedule.lunchEnd) : null,
+    late_block_minutes: schedule ? schedule.late_block_minutes ?? null : null,
+    halfday_late_minutes: schedule ? schedule.halfday_late_minutes ?? null : null,
+    undertime_grace_minutes: schedule ? schedule.undertime_grace_minutes || 0 : 0,
   };
 }
 
-function metricsFor(snapshot, timeIn, timeOut) {
+// `lunch`: { lunchOut, lunchIn } as Dates, when the record has lunch stamps.
+function metricsFor(snapshot, timeIn, timeOut, lunch = {}) {
   return computeMetrics({
     timeIn,
     timeOut,
@@ -254,7 +299,19 @@ function metricsFor(snapshot, timeIn, timeOut) {
     graceMinutes: snapshot.grace_minutes,
     breakMinutes: snapshot.break_minutes,
     paidBreakMinutes: snapshot.paid_break_minutes || 0,
+    lunchStart: fromDbUtc(snapshot.scheduled_lunch_start),
+    lunchEnd: fromDbUtc(snapshot.scheduled_lunch_end),
+    lunchOut: lunch.lunchOut || null,
+    lunchIn: lunch.lunchIn || null,
+    lateBlockMinutes: snapshot.late_block_minutes ?? null,
+    halfdayLateMinutes: snapshot.halfday_late_minutes ?? null,
+    undertimeGraceMinutes: snapshot.undertime_grace_minutes || 0,
   });
+}
+
+// The lunch stamps of a stored record, for metricsFor.
+function lunchOf(log) {
+  return { lunchOut: fromDbUtc(log.lunch_out), lunchIn: fromDbUtc(log.lunch_in) };
 }
 
 // Re-measures the time record (if any) of one employee's day against the schedule as it is
@@ -264,14 +321,14 @@ function metricsFor(snapshot, timeIn, timeOut) {
 // Returns true when there was a record to re-measure.
 async function remeasureDay(employeeId, workDate, conn = pool) {
   const [[log]] = await conn.query(
-    'SELECT id, time_in, time_out FROM attendance_logs WHERE employee_id = ? AND work_date = ?',
+    'SELECT id, time_in, time_out, lunch_out, lunch_in FROM attendance_logs WHERE employee_id = ? AND work_date = ?',
     [employeeId, workDate]
   );
   if (!log) return false;
   const snapshot = scheduleSnapshot(await scheduledShift(employeeId, workDate, conn));
   await conn.query('UPDATE attendance_logs SET ? WHERE id = ?', [{
     ...snapshot,
-    ...metricsFor(snapshot, fromDbUtc(log.time_in), log.time_out ? fromDbUtc(log.time_out) : null),
+    ...metricsFor(snapshot, fromDbUtc(log.time_in), log.time_out ? fromDbUtc(log.time_out) : null, lunchOf(log)),
   }, log.id]);
   return true;
 }
@@ -323,6 +380,7 @@ module.exports = {
   computeMetrics,
   scheduleSnapshot,
   metricsFor,
+  lunchOf,
   remeasureDay,
   employeeForUser,
 };

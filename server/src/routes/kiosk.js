@@ -9,8 +9,8 @@
 // to /login, which a kiosk has no use for.
 const express = require('express');
 const pool = require('../db');
-const { BUSINESS_TZ, HttpError, toLocalDisplay, toDbUtc, fromDbUtc } = require('../lib/attendance');
-const { clockStatus, stampIn, stampOut } = require('../lib/timeClock');
+const { BUSINESS_TZ, HttpError, toLocalDisplay, toDbUtc } = require('../lib/attendance');
+const { clockStatus, lastStampAt, stamp } = require('../lib/timeClock');
 const {
   PIN_RE, pinHash, tokenHash, lockedFor, recordFailure, clearFailures, parseQr,
 } = require('../lib/kiosk');
@@ -83,36 +83,39 @@ router.get('/:token', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PIN -> who it is and whether the next press is Time In or Time Out.
+// PIN -> who it is and which stamp the next press is: Time In, Lunch Out, Lunch In or Time
+// Out (lib/timeClock nextAction).
 router.post('/:token/lookup', async (req, res, next) => {
   try {
     const device = await deviceFor(req.params.token);
     const emp = await employeeForPin(req, device);
     const status = await clockStatus(emp.id);
-    const done = !status.open_log && status.today.log?.time_out;
-    res.json({ employee: who(emp), action: status.open_log ? 'out' : done ? 'done' : 'in', ...status });
+    res.json({ employee: who(emp), action: status.next_action, ...status });
   } catch (err) { next(err); }
 });
 
 // The PIN is sent again with the press (nothing is held between the two requests), and
 // the action must match the employee's state -- a stale screen cannot time someone in twice.
+// At Lunch Out time, Time Out is allowed instead (going home for the day).
 router.post('/:token/punch', async (req, res, next) => {
   try {
     const device = await deviceFor(req.params.token);
     const emp = await employeeForPin(req, device);
     const action = req.body?.action;
-    if (!['in', 'out'].includes(action)) throw new HttpError(400, 'Choose Time In or Time Out');
-    const log = action === 'in'
-      ? await stampIn(emp.id, { source: 'kiosk', deviceId: device.id })
-      : await stampOut(emp.id, { deviceId: device.id });
+    if (!['in', 'out', 'lunch_out', 'lunch_in'].includes(action)) throw new HttpError(400, 'Choose Time In or Time Out');
+    const { next_action: expected } = await clockStatus(emp.id);
+    if (action !== expected && !(action === 'out' && expected === 'lunch_out')) {
+      throw new HttpError(409, 'This screen is out of date. Enter your PIN again.');
+    }
+    const log = await stamp(emp.id, action, { source: 'kiosk', deviceId: device.id });
     await pool.query('UPDATE kiosk_devices SET last_used_at = NOW() WHERE id = ?', [device.id]);
     res.status(action === 'in' ? 201 : 200).json({ employee: who(emp), action, log });
   } catch (err) { next(err); }
 });
 
-// QR: one scan is the whole stamp -- the badge says who, and the employee's state says Time In
-// or Time Out. A badge scanned again within a few minutes of its Time In (held up twice, or
-// left in front of the camera) is not taken as a Time Out.
+// QR: one scan is the whole stamp -- the badge says who, and the employee's state says which
+// stamp it is. A badge scanned again within a few minutes of its last stamp (held up twice,
+// or left in front of the camera) does not stamp again.
 const RESCAN_GUARD_MS = 3 * 60 * 1000;
 
 router.post('/:token/scan', async (req, res, next) => {
@@ -120,16 +123,14 @@ router.post('/:token/scan', async (req, res, next) => {
     const device = await deviceFor(req.params.token);
     const emp = await employeeForQr(req);
     const status = await clockStatus(emp.id);
-    if (!status.open_log && status.today.log?.time_out) {
+    if (status.next_action === 'done') {
       return res.json({ employee: who(emp), action: 'done', log: status.today.log, ...status });
     }
-    if (status.open_log && Date.now() - fromDbUtc(status.open_log.time_in).getTime() < RESCAN_GUARD_MS) {
+    if (status.open_log && Date.now() - lastStampAt(status.open_log).getTime() < RESCAN_GUARD_MS) {
       return res.json({ employee: who(emp), action: 'recent', log: status.open_log, ...status });
     }
-    const action = status.open_log ? 'out' : 'in';
-    const log = action === 'in'
-      ? await stampIn(emp.id, { source: 'kiosk', deviceId: device.id })
-      : await stampOut(emp.id, { deviceId: device.id });
+    const action = status.next_action;
+    const log = await stamp(emp.id, action, { source: 'kiosk', deviceId: device.id });
     await pool.query('UPDATE kiosk_devices SET last_used_at = NOW() WHERE id = ?', [device.id]);
     return res.status(action === 'in' ? 201 : 200).json({ employee: who(emp), action, log });
   } catch (err) { return next(err); }

@@ -87,6 +87,8 @@ export default function Attendance() {
       work_date: row?.work_date || todayIso(),
       time_in: toInputValue(row?.scheduled_start_local),
       time_out: toInputValue(row?.scheduled_end_local),
+      lunch_out: '',
+      lunch_in: '',
       remarks: '',
       approved_ot_hours: '',
     });
@@ -97,6 +99,7 @@ export default function Attendance() {
   function openEdit(row) {
     setForm({
       time_in: toInputValue(row.time_in_local), time_out: toInputValue(row.time_out_local), remarks: row.remarks || '',
+      lunch_out: toInputValue(row.lunch_out_local), lunch_in: toInputValue(row.lunch_in_local),
       approved_ot_hours: row.approved_ot_minutes === null || row.approved_ot_minutes === undefined ? '' : String(row.approved_ot_minutes / 60),
     });
     setEditing({ mode: 'edit', row });
@@ -106,7 +109,7 @@ export default function Attendance() {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    const payload = { ...form, time_out: form.time_out || null };
+    const payload = { ...form, time_out: form.time_out || null, lunch_out: form.lunch_out || null, lunch_in: form.lunch_in || null };
     try {
       if (editing.mode === 'new') await api.post('/attendance', payload);
       else await api.put(`/attendance/${editing.row.log_id}`, payload);
@@ -188,6 +191,13 @@ export default function Attendance() {
       ),
     },
     {
+      key: 'lunch',
+      label: 'Lunch',
+      render: (r) => (r.lunch_out_local
+        ? `${formatLocalTime(r.lunch_out_local)} – ${formatLocalTime(r.lunch_in_local) || '?'}`
+        : <span className="muted">{r.has_lunch && r.log_id ? 'not stamped' : '—'}</span>),
+    },
+    {
       key: 'time_out',
       label: 'Time Out',
       render: (r) => (
@@ -199,7 +209,7 @@ export default function Attendance() {
         </>
       ),
     },
-    { key: 'late_minutes', label: 'Late', render: (r) => formatMinutes(r.late_minutes) },
+    { key: 'late_minutes', label: 'Late', render: (r) => <>{formatMinutes(r.late_minutes)}{r.halfday_absent && <div className="muted" style={{ fontSize: 11 }}>half day absent</div>}</> },
     { key: 'undertime_minutes', label: 'Undertime', render: (r) => formatMinutes(r.undertime_minutes) },
     { key: 'overtime_minutes', label: 'Overtime', render: (r) => <>{formatMinutes(r.overtime_minutes)}{r.approved_ot_minutes !== null && r.approved_ot_minutes !== undefined && r.log_id && <div className="muted" style={{ fontSize: 11 }}>approved</div>}</> },
     { key: 'worked_minutes', label: 'Worked', render: (r) => formatMinutes(r.worked_minutes) },
@@ -419,6 +429,16 @@ export default function Attendance() {
               <div className="field">
                 <label>Time Out</label>
                 <input type="datetime-local" value={form.time_out} onChange={(e) => setForm({ ...form, time_out: e.target.value })} />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Lunch Out <span className="muted">(optional)</span></label>
+                <input type="datetime-local" value={form.lunch_out} onChange={(e) => setForm({ ...form, lunch_out: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>Lunch In <span className="muted">(optional)</span></label>
+                <input type="datetime-local" value={form.lunch_in} onChange={(e) => setForm({ ...form, lunch_in: e.target.value })} />
               </div>
             </div>
             <div className="field">

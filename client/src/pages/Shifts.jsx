@@ -4,11 +4,12 @@ import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { formatMinutes, formatShiftHours } from '../utils/attendance';
+import { formatClock, formatMinutes, formatShiftHours } from '../utils/attendance';
 
 const EMPTY = {
   name: '', start_time: '08:00', end_time: '17:00', grace_minutes: 0, break_minutes: 60, paid_break_minutes: 0,
   branch_id: '', description: '', is_active: true,
+  lunch_start: '', lunch_end: '', late_block_minutes: '', halfday_late_minutes: '', undertime_grace_minutes: 0,
 };
 
 export default function Shifts() {
@@ -46,6 +47,11 @@ export default function Shifts() {
       grace_minutes: row.grace_minutes,
       break_minutes: row.break_minutes,
       paid_break_minutes: row.paid_break_minutes || 0,
+      lunch_start: row.lunch_start ? row.lunch_start.slice(0, 5) : '',
+      lunch_end: row.lunch_end ? row.lunch_end.slice(0, 5) : '',
+      late_block_minutes: row.late_block_minutes ?? '',
+      halfday_late_minutes: row.halfday_late_minutes ?? '',
+      undertime_grace_minutes: row.undertime_grace_minutes || 0,
       branch_id: row.branch_id || '',
       description: row.description || '',
       is_active: !!row.is_active,
@@ -108,8 +114,29 @@ export default function Shifts() {
         </>
       ),
     },
-    { key: 'grace_minutes', label: 'Grace', render: (r) => formatMinutes(r.grace_minutes) || '—' },
-    { key: 'break_minutes', label: 'Break', render: (r) => <>{formatMinutes(r.break_minutes) || '—'}{r.paid_break_minutes > 0 && <div className="muted" style={{ fontSize: 11 }}>+{formatMinutes(r.paid_break_minutes)} paid</div>}</> },
+    {
+      key: 'grace_minutes',
+      label: 'Grace',
+      render: (r) => (
+        <>
+          {formatMinutes(r.grace_minutes) || '—'}
+          {r.late_block_minutes > 0 && <div className="muted" style={{ fontSize: 11 }}>late in {r.late_block_minutes}-min blocks</div>}
+          {r.halfday_late_minutes > 0 && <div className="muted" style={{ fontSize: 11 }}>{formatMinutes(r.halfday_late_minutes)}+ late = half day</div>}
+          {r.undertime_grace_minutes > 0 && <div className="muted" style={{ fontSize: 11 }}>{formatMinutes(r.undertime_grace_minutes)} time-out grace</div>}
+        </>
+      ),
+    },
+    {
+      key: 'break_minutes',
+      label: 'Break',
+      render: (r) => (
+        <>
+          {formatMinutes(r.break_minutes) || '—'}
+          {r.paid_break_minutes > 0 && <div className="muted" style={{ fontSize: 11 }}>+{formatMinutes(r.paid_break_minutes)} paid</div>}
+          {r.lunch_start && <div className="muted" style={{ fontSize: 11 }}>lunch stamped {formatClock(r.lunch_start)}–{formatClock(r.lunch_end)}</div>}
+        </>
+      ),
+    },
     { key: 'paid', label: 'Paid Hours', render: (r) => formatMinutes(paidMinutes(r)) },
     { key: 'assigned_count', label: 'Assigned Now' },
     { key: 'is_active', label: 'Status', render: (r) => (r.is_active ? <span className="badge badge-success">Active</span> : <span className="badge badge-muted">Inactive</span>) },
@@ -187,6 +214,37 @@ export default function Shifts() {
               Arriving within the grace period is on time; after it, lateness counts from the start time.
               The unpaid break is taken off worked hours; paid breaks (e.g. two 15-minute breaks outside
               Shift In / Out) are added. Paid hours for a full day: <strong>{formatMinutes(formPaid) || '—'}</strong>.
+            </p>
+            <h4 style={{ margin: '14px 0 6px' }}>Stricter rules <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>(optional — leave blank for none)</span></h4>
+            <div className="field-row">
+              <div className="field">
+                <label>Lunch Out (stamped)</label>
+                <input type="time" value={form.lunch_start} onChange={(e) => setForm({ ...form, lunch_start: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>Lunch In by</label>
+                <input type="time" value={form.lunch_end} onChange={(e) => setForm({ ...form, lunch_end: e.target.value })} />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Late counted in blocks of (minutes)</label>
+                <input type="number" min="1" max="240" placeholder="e.g. 30" value={form.late_block_minutes} onChange={(e) => setForm({ ...form, late_block_minutes: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>Late this much = half day absent (minutes)</label>
+                <input type="number" min="1" max="480" placeholder="e.g. 60" value={form.halfday_late_minutes} onChange={(e) => setForm({ ...form, halfday_late_minutes: e.target.value })} />
+              </div>
+            </div>
+            <div className="field">
+              <label>Time-out grace (minutes before end that are not undertime)</label>
+              <input type="number" min="0" max="240" value={form.undertime_grace_minutes} onChange={(e) => setForm({ ...form, undertime_grace_minutes: e.target.value })} />
+            </div>
+            <p className="muted" style={{ marginTop: -4 }}>
+              With a lunch set, employees stamp four times a day: Time In, Lunch Out, Lunch In, Time Out. Back after
+              the &ldquo;Lunch In by&rdquo; time is late (no grace). With late blocks, lateness counts from the end of the grace
+              period and goes up in blocks: 1–30 minutes late is 30, 31–60 is 60. Late by the half-day amount or more (morning
+              or after lunch) is half a day absent instead.
             </p>
             <div className="field">
               <label>Description</label>

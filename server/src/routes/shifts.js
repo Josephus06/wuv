@@ -47,6 +47,20 @@ function readBody(body) {
   if (!Number.isInteger(brk) || brk < 0 || brk > 480) return { error: 'Break minutes must be a whole number from 0 to 480' };
   if (!Number.isInteger(paidBrk) || paidBrk < 0 || paidBrk > 240) return { error: 'Paid break minutes must be a whole number from 0 to 240' };
 
+  // The stricter rules (db/add-shift-lunch.js); blank = off.
+  const lunchStart = body.lunch_start || null;
+  const lunchEnd = body.lunch_end || null;
+  if (!!lunchStart !== !!lunchEnd) return { error: 'Enter both the lunch start and end, or leave both blank' };
+  if (lunchStart && (!isTime(lunchStart) || !isTime(lunchEnd))) return { error: 'Lunch times must be HH:MM' };
+  if (lunchStart && lunchStart.slice(0, 5) >= lunchEnd.slice(0, 5)) return { error: 'Lunch must end after it starts' };
+  const optMinutes = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
+  const lateBlock = optMinutes(body.late_block_minutes);
+  const halfdayLate = optMinutes(body.halfday_late_minutes);
+  const utGrace = Number(body.undertime_grace_minutes || 0);
+  if (lateBlock !== null && (!Number.isInteger(lateBlock) || lateBlock < 1 || lateBlock > 240)) return { error: 'Late block must be 1 to 240 minutes, or blank' };
+  if (halfdayLate !== null && (!Number.isInteger(halfdayLate) || halfdayLate < 1 || halfdayLate > 480)) return { error: 'Half-day late must be 1 to 480 minutes, or blank' };
+  if (!Number.isInteger(utGrace) || utGrace < 0 || utGrace > 240) return { error: 'Time-out grace must be a whole number from 0 to 240' };
+
   return {
     values: {
       name,
@@ -55,6 +69,11 @@ function readBody(body) {
       grace_minutes: grace,
       break_minutes: brk,
       paid_break_minutes: paidBrk,
+      lunch_start: lunchStart,
+      lunch_end: lunchEnd,
+      late_block_minutes: lateBlock,
+      halfday_late_minutes: halfdayLate,
+      undertime_grace_minutes: utGrace,
       branch_id: body.branch_id ? Number(body.branch_id) : null,
       description: body.description ? String(body.description).trim() : null,
       is_active: body.is_active ?? true,

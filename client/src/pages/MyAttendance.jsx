@@ -42,9 +42,13 @@ export default function MyAttendance() {
     setNotice('');
     try {
       const { data: log } = await api.post(`/attendance/me/${kind}`);
-      setNotice(kind === 'time-in'
-        ? `Timed in at ${formatLocalTime(log.time_in_local)}${log.late_minutes ? ` — ${formatMinutes(log.late_minutes)} late` : ''}.`
-        : `Timed out at ${formatLocalTime(log.time_out_local)}. Worked ${formatMinutes(log.worked_minutes, { blankZero: false })}.`);
+      const late = log.late_minutes ? ` — ${formatMinutes(log.late_minutes)} late` : '';
+      setNotice({
+        'time-in': `Timed in at ${formatLocalTime(log.time_in_local)}${late}.`,
+        'lunch-out': `Out to lunch at ${formatLocalTime(log.lunch_out_local)}.`,
+        'lunch-in': `Back from lunch at ${formatLocalTime(log.lunch_in_local)}${late}.`,
+        'time-out': `Timed out at ${formatLocalTime(log.time_out_local)}. Worked ${formatMinutes(log.worked_minutes, { blankZero: false })}.`,
+      }[kind]);
       // Tell the top-bar chip to refresh without waiting for its own poll.
       window.dispatchEvent(new Event('attendance:changed'));
       await load();
@@ -82,8 +86,13 @@ export default function MyAttendance() {
     { key: 'work_date', label: 'Date', render: (r) => formatDate(r.work_date) },
     { key: 'shift_name', label: 'Shift', render: (r) => r.shift_name || <span className="muted">Unscheduled</span> },
     { key: 'time_in', label: 'Time In', render: (r) => formatLocalTime(r.time_in_local, r.work_date) },
+    {
+      key: 'lunch',
+      label: 'Lunch',
+      render: (r) => (r.lunch_out_local ? `${formatLocalTime(r.lunch_out_local)} – ${formatLocalTime(r.lunch_in_local) || '?'}` : '—'),
+    },
     { key: 'time_out', label: 'Time Out', render: (r) => formatLocalTime(r.time_out_local, r.work_date) || '—' },
-    { key: 'late_minutes', label: 'Late', render: (r) => formatMinutes(r.late_minutes) },
+    { key: 'late_minutes', label: 'Late', render: (r) => <>{formatMinutes(r.late_minutes)}{r.halfday_absent && <div className="muted" style={{ fontSize: 11 }}>half day absent</div>}</> },
     { key: 'undertime_minutes', label: 'Undertime', render: (r) => formatMinutes(r.undertime_minutes) },
     { key: 'worked_minutes', label: 'Worked', render: (r) => formatMinutes(r.worked_minutes) },
     {
@@ -140,9 +149,20 @@ export default function MyAttendance() {
             <div className="time-clock-actions">
               {open ? (
                 <>
-                  <button type="button" className="btn btn-danger" disabled={busy} onClick={() => stamp('time-out')}>
-                    {busy ? 'Saving…' : 'Time Out'}
-                  </button>
+                  {data.next_action === 'lunch_out' && (
+                    <button type="button" className="btn btn-primary" disabled={busy} onClick={() => stamp('lunch-out')}>
+                      {busy ? 'Saving…' : 'Lunch Out'}
+                    </button>
+                  )}
+                  {data.next_action === 'lunch_in' ? (
+                    <button type="button" className="btn btn-primary" disabled={busy} onClick={() => stamp('lunch-in')}>
+                      {busy ? 'Saving…' : 'Back from Lunch'}
+                    </button>
+                  ) : (
+                    <button type="button" className="btn btn-danger" disabled={busy} onClick={() => stamp('time-out')}>
+                      {busy ? 'Saving…' : 'Time Out'}
+                    </button>
+                  )}
                   <span className="time-clock-elapsed">
                     In since {formatLocalTime(open.time_in_local)} · {formatMinutes(elapsedMin, { blankZero: false })}
                   </span>

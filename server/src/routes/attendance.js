@@ -9,7 +9,7 @@ const {
   remeasureDay, employeeForUser,
 } = require('../lib/attendance');
 const {
-  LOG_SELECT, serializeLog, clockStatus, stampIn, stampOut,
+  LOG_SELECT, serializeLog, clockStatus, stampIn, stampOut, stampLunch,
 } = require('../lib/timeClock');
 const { readFirstSheet } = require('../lib/xlsx');
 const { parseAttendanceSheet, matchEmployee, matchShift } = require('../lib/attendanceImport');
@@ -69,6 +69,25 @@ router.post('/me/time-out', requireAuth, async (req, res, next) => {
   try {
     const employee = await requireEmployee(req);
     res.json(await stampOut(employee.id, { remarks: req.body?.remarks }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Lunch Out / Lunch In, on a shift with a stamped lunch.
+router.post('/me/lunch-out', requireAuth, async (req, res, next) => {
+  try {
+    const employee = await requireEmployee(req);
+    res.json(await stampLunch(employee.id, 'lunch_out'));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/me/lunch-in', requireAuth, async (req, res, next) => {
+  try {
+    const employee = await requireEmployee(req);
+    res.json(await stampLunch(employee.id, 'lunch_in'));
   } catch (err) {
     next(err);
   }
@@ -287,6 +306,10 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
           scheduled_end_local: log ? s.scheduled_end_local : toLocalDisplay(toDbUtc(schedule.end)),
           time_in_local: s ? s.time_in_local : null,
           time_out_local: s ? s.time_out_local : null,
+          lunch_out_local: s ? s.lunch_out_local : null,
+          lunch_in_local: s ? s.lunch_in_local : null,
+          has_lunch: log ? !!log.scheduled_lunch_start : !!assignment.lunch_start,
+          halfday_absent: !!(log && log.halfday_absent),
           late_minutes: log ? log.late_minutes : 0,
           undertime_minutes: log ? log.undertime_minutes : 0,
           overtime_minutes: log ? (log.approved_ot_minutes ?? log.overtime_minutes) : 0,
@@ -335,6 +358,18 @@ function readTimes(body, workDate) {
   return { timeIn, timeOut };
 }
 
+// Lunch Out / Lunch In from the form (optional, same format), in order between in and out.
+function readLunch(body, timeIn, timeOut) {
+  const lunchOut = body.lunch_out ? parseLocalDateTime(body.lunch_out) : null;
+  const lunchIn = body.lunch_in ? parseLocalDateTime(body.lunch_in) : null;
+  if ((body.lunch_out && !lunchOut) || (body.lunch_in && !lunchIn)) throw new HttpError(400, 'Lunch times must be YYYY-MM-DD HH:MM');
+  if (lunchIn && !lunchOut) throw new HttpError(400, 'Enter the Lunch Out too, or leave both lunch times blank');
+  if (lunchOut && lunchOut <= timeIn) throw new HttpError(400, 'Lunch out must be after time in');
+  if (lunchIn && lunchIn <= lunchOut) throw new HttpError(400, 'Lunch in must be after lunch out');
+  if (timeOut && ((lunchIn && timeOut <= lunchIn) || timeOut <= lunchOut)) throw new HttpError(400, 'Time out must be after the lunch times');
+  return { lunchOut, lunchIn };
+}
+
 function readRemarks(body) {
   return body.remarks ? String(body.remarks).trim().slice(0, 255) : null;
 }
@@ -357,6 +392,7 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
     if (!employeeId) return res.status(400).json({ error: 'Choose an employee' });
     if (!isIsoDate(workDate)) return res.status(400).json({ error: 'Work date must be a valid date' });
     const { timeIn, timeOut } = readTimes(req.body, workDate);
+    const lunch = readLunch(req.body, timeIn, timeOut);
     const approvedOt = readApprovedOt(req.body);
 
     const [[emp]] = await pool.query('SELECT id FROM employees WHERE id = ?', [employeeId]);
@@ -369,7 +405,9 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
       ...snapshot,
       time_in: toDbUtc(timeIn),
       time_out: timeOut ? toDbUtc(timeOut) : null,
-      ...metricsFor(snapshot, timeIn, timeOut),
+      lunch_out: lunch.lunchOut ? toDbUtc(lunch.lunchOut) : null,
+      lunch_in: lunch.lunchIn ? toDbUtc(lunch.lunchIn) : null,
+      ...metricsFor(snapshot, timeIn, timeOut, lunch),
       source: 'manual',
       remarks: readRemarks(req.body),
       recorded_by_user_id: req.user.id,
@@ -391,6 +429,7 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
     const [[log]] = await pool.query(`${LOG_SELECT} WHERE l.id = ?`, [req.params.id]);
     if (!log) return res.status(404).json({ error: 'Not found' });
     const { timeIn, timeOut } = readTimes(req.body, log.work_date);
+    const lunch = readLunch(req.body, timeIn, timeOut);
     const approvedOt = readApprovedOt(req.body);
 
     const snapshot = log.scheduled_start
@@ -406,9 +445,16 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
       grace_minutes: snapshot.grace_minutes,
       break_minutes: snapshot.break_minutes,
       paid_break_minutes: snapshot.paid_break_minutes || 0,
+      scheduled_lunch_start: snapshot.scheduled_lunch_start || null,
+      scheduled_lunch_end: snapshot.scheduled_lunch_end || null,
+      late_block_minutes: snapshot.late_block_minutes ?? null,
+      halfday_late_minutes: snapshot.halfday_late_minutes ?? null,
+      undertime_grace_minutes: snapshot.undertime_grace_minutes || 0,
       time_in: toDbUtc(timeIn),
       time_out: timeOut ? toDbUtc(timeOut) : null,
-      ...metricsFor(snapshot, timeIn, timeOut),
+      lunch_out: lunch.lunchOut ? toDbUtc(lunch.lunchOut) : null,
+      lunch_in: lunch.lunchIn ? toDbUtc(lunch.lunchIn) : null,
+      ...metricsFor(snapshot, timeIn, timeOut, lunch),
       remarks: readRemarks(req.body),
       ...(approvedOt !== undefined ? { approved_ot_minutes: approvedOt } : {}),
       ...(keepOriginal ? { original_time_in: log.time_in, original_time_out: log.time_out } : {}),

@@ -22,6 +22,14 @@ const DONE_TIMEOUT_MS = 6000;
 const SCAN_DONE_MS = 4000;
 const SAME_BADGE_IGNORE_MS = 8000; // the same badge still in front of the camera after its stamp
 
+// The four stamps (a shift with a stamped lunch uses all four; others only In and Out).
+const STAMPS = {
+  in: { button: 'TIME IN', done: 'Timed in', cls: 'is-in', at: (l) => l.time_in_local },
+  lunch_out: { button: 'LUNCH OUT', done: 'Out to lunch', cls: 'is-out', at: (l) => l.lunch_out_local },
+  lunch_in: { button: 'BACK FROM LUNCH', done: 'Back from lunch', cls: 'is-in', at: (l) => l.lunch_in_local },
+  out: { button: 'TIME OUT', done: 'Timed out', cls: 'is-out', at: (l) => l.time_out_local },
+};
+
 function stored(key, fallback) {
   try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
 }
@@ -89,7 +97,7 @@ export default function Kiosk() {
     try {
       const { data } = await api.post(`/kiosk/${token}/scan`, { qr: code });
       setResult(data);
-      setScreen(data.action === 'in' || data.action === 'out' ? 'done' : 'info');
+      setScreen(STAMPS[data.action] ? 'done' : 'info');
       after(SCAN_DONE_MS);
     } catch (err) {
       setError(err.response?.data?.error || 'Could not record the time. Try again.');
@@ -144,11 +152,11 @@ export default function Kiosk() {
     return () => window.removeEventListener('keydown', onKey);
   }, [press, reset, screen, mode, scan]);
 
-  async function stamp() {
+  async function stamp(action = who.action) {
     setBusy(true);
     setError('');
     try {
-      const { data } = await api.post(`/kiosk/${token}/punch`, { pin, action: who.action });
+      const { data } = await api.post(`/kiosk/${token}/punch`, { pin, action });
       setResult(data);
       setScreen('done');
       after(DONE_TIMEOUT_MS);
@@ -249,10 +257,14 @@ export default function Kiosk() {
             </div>
           ) : (
             <>
-              {who.action === 'out' && <div className="kiosk-sub">On duty since {formatLocalTime(who.open_log.time_in_local)}</div>}
-              <button type="button" className={`kiosk-punch ${who.action === 'in' ? 'is-in' : 'is-out'}`} disabled={busy} onClick={stamp}>
-                {busy ? 'Saving…' : who.action === 'in' ? 'TIME IN' : 'TIME OUT'}
+              {who.action !== 'in' && who.open_log && <div className="kiosk-sub">On duty since {formatLocalTime(who.open_log.time_in_local)}</div>}
+              {who.action === 'lunch_in' && <div className="kiosk-sub">Out to lunch since {formatLocalTime(who.open_log.lunch_out_local)}</div>}
+              <button type="button" className={`kiosk-punch ${STAMPS[who.action].cls}`} disabled={busy} onClick={() => stamp()}>
+                {busy ? 'Saving…' : STAMPS[who.action].button}
               </button>
+              {who.action === 'lunch_out' && (
+                <button type="button" className="kiosk-cancel" disabled={busy} onClick={() => stamp('out')}>Time out instead (going home)</button>
+              )}
             </>
           )}
           <button type="button" className="kiosk-cancel" disabled={busy} onClick={reset}>{who.action === 'done' ? 'OK' : 'Not me — cancel'}</button>
@@ -265,7 +277,7 @@ export default function Kiosk() {
           <div className="kiosk-sub">{result.employee.name}{result.employee.employee_code ? ` · ${result.employee.employee_code}` : ''}</div>
           <div className="kiosk-done-note">
             {result.action === 'recent'
-              ? <>Already timed in at {formatLocalTime(result.log.time_in_local)}. Scan again at the end of your shift to time out.</>
+              ? <>Already stamped at {formatLocalTime(result.log.lunch_in_local || result.log.lunch_out_local || result.log.time_in_local)}. No need to scan again.</>
               : <>Already done for today: {formatLocalTime(result.log.time_in_local)} – {formatLocalTime(result.log.time_out_local, result.today.work_date)}</>}
           </div>
           <button type="button" className="kiosk-cancel" onClick={reset}>OK</button>
@@ -276,11 +288,13 @@ export default function Kiosk() {
         <div className="kiosk-panel kiosk-success">
           <div className="kiosk-check">✓</div>
           <div className="kiosk-hello">
-            {result.action === 'in' ? 'Timed in' : 'Timed out'} at {formatLocalTime(result.action === 'in' ? result.log.time_in_local : result.log.time_out_local)}
+            {STAMPS[result.action].done} at {formatLocalTime(STAMPS[result.action].at(result.log))}
           </div>
           <div className="kiosk-sub">
             {result.employee.name}
-            {result.action === 'in' && result.log.late_minutes > 0 && ` · ${formatMinutes(result.log.late_minutes)} late`}
+            {(result.action === 'in' || result.action === 'lunch_in') && result.log.late_minutes > 0 && ` · ${formatMinutes(result.log.late_minutes)} late`}
+            {(result.action === 'in' || result.action === 'lunch_in') && result.log.halfday_absent && ' · counted as half day absent'}
+            {result.action === 'lunch_out' && result.log.scheduled_lunch_end_local && ` · back by ${formatLocalTime(result.log.scheduled_lunch_end_local)}`}
             {result.action === 'out' && ` · worked ${formatMinutes(result.log.worked_minutes) || '0m'}`}
           </div>
           <button type="button" className="kiosk-cancel" onClick={reset}>Done</button>

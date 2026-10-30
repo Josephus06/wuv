@@ -20,6 +20,10 @@
 //     regular holiday is still paid one day, if the employee was not absent on the last
 //     scheduled day before it (the Labor Code's condition).
 //
+//   A day the shift's rules made half a day absent (late an hour or more, db/add-shift-lunch.js)
+//     counts as half a day: daily-paid get 0.5 day, monthly-paid have half a day deducted; the
+//     other half's lateness and undertime still come off.
+//
 //   Overtime and night differential are paid unless the profile says Compute Overtime Pay =
 //   No (managerial staff). Overtime is the record's approved overtime when one is set, else
 //   the time after the scheduled end -- on an unscheduled day, whatever is past 8 hours --
@@ -120,7 +124,7 @@ async function loadInputs(run, conn) {
   const [logs] = await conn.query(
     `SELECT id, employee_id, DATE_FORMAT(work_date, '%Y-%m-%d') AS work_date, scheduled_start, scheduled_end,
             break_minutes, paid_break_minutes, time_in, time_out, late_minutes, undertime_minutes, overtime_minutes,
-            approved_ot_minutes, worked_minutes
+            approved_ot_minutes, worked_minutes, halfday_absent
      FROM attendance_logs WHERE employee_id IN (?) AND work_date BETWEEN ? AND ?`,
     [ids, lookback, end]
   );
@@ -251,12 +255,14 @@ function computeEmployee(emp, comp, ctx) {
         continue;
       }
       daysWorked += 1;
+      const halfday = !!log.halfday_absent;
+      if (halfday) daysAbsent += 0.5;
       let regMin;
       let otRaw;
       if (log.scheduled_start && log.scheduled_end) {
         // Paid breaks (outside Shift In / Out) are part of the day's paid time.
         const schedMin = Math.max(0, minutesBetween(log.scheduled_start, log.scheduled_end) - (log.break_minutes || 0) + (log.paid_break_minutes || 0));
-        regMin = Math.max(0, Math.min(schedMin, fullDayMin) - log.late_minutes - log.undertime_minutes);
+        regMin = Math.max(0, Math.min(schedMin, fullDayMin) * (halfday ? 0.5 : 1) - log.late_minutes - log.undertime_minutes);
         otRaw = log.overtime_minutes;
         lateMin += log.late_minutes;
         undertimeMin += log.undertime_minutes;
@@ -275,6 +281,10 @@ function computeEmployee(emp, comp, ctx) {
       } else if (kind === 'ordinary') {
         if (regMin <= 0) {
           warnings.push(`${date}: timed in and out with no working time -- not paid for that day.`);
+        } else if (halfday) {
+          dailyDays += 0.5;
+          dailyLateMin += log.late_minutes;
+          dailyUndertimeMin += log.undertime_minutes;
         } else if (regMin < fullDayMin / 2) {
           dailyDays += 0.5;
         } else {

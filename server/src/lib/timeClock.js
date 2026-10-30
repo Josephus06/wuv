@@ -2,10 +2,13 @@
 // Clock app (a signed-in employee, source 'self') and the branch kiosk (an employee PIN on a
 // registered device, source 'kiosk'). Same rules everywhere: the server's clock, the shift
 // the day is scheduled for, one record per work day.
+//
+// A shift with a stamped lunch (shifts.lunch_start / lunch_end) takes four stamps a day:
+// In, Lunch Out, Lunch In, Out. nextAction() says which one the next stamp is.
 const pool = require('../db');
 const {
   MAX_OPEN_HOURS, HttpError, toDbUtc, fromDbUtc, toLocalDisplay, addDays, todayLocal,
-  isOvernight, scheduledShift, scheduleSnapshot, metricsFor,
+  isOvernight, scheduledShift, scheduleSnapshot, metricsFor, lunchOf,
 } = require('./attendance');
 
 const LOG_SELECT = `
@@ -27,6 +30,13 @@ function serializeLog(row) {
     time_out: row.time_out,
     time_in_local: toLocalDisplay(row.time_in),
     time_out_local: toLocalDisplay(row.time_out),
+    lunch_out: row.lunch_out || null,
+    lunch_in: row.lunch_in || null,
+    lunch_out_local: toLocalDisplay(row.lunch_out),
+    lunch_in_local: toLocalDisplay(row.lunch_in),
+    scheduled_lunch_start_local: toLocalDisplay(row.scheduled_lunch_start),
+    scheduled_lunch_end_local: toLocalDisplay(row.scheduled_lunch_end),
+    halfday_absent: !!row.halfday_absent,
     late_minutes: row.late_minutes,
     undertime_minutes: row.undertime_minutes,
     overtime_minutes: row.overtime_minutes,
@@ -72,6 +82,29 @@ async function currentWorkDate(employeeId, now) {
   return { workDate: today, schedule: await scheduledShift(employeeId, today) };
 }
 
+const HOUR = 3600000;
+
+// Which stamp comes next: 'in', 'lunch_out', 'lunch_in', 'out', or 'done' for the day.
+// Lunch Out is offered from an hour before lunch until lunch ends, and not at all to someone
+// who timed in after lunch began (a half day); out at lunch, the next stamp is the return
+// until the shift's end -- after that a forgotten Lunch In makes it the Time Out.
+function nextAction(open, todayLog, now) {
+  if (!open) return todayLog?.time_out ? 'done' : 'in';
+  if (!open.scheduled_lunch_start || !open.scheduled_lunch_end || open.lunch_in) return 'out';
+  const lunchStart = fromDbUtc(open.scheduled_lunch_start);
+  const lunchEnd = fromDbUtc(open.scheduled_lunch_end);
+  if (!open.lunch_out) {
+    if (fromDbUtc(open.time_in) >= lunchStart) return 'out';
+    return now >= new Date(lunchStart.getTime() - HOUR) && now < lunchEnd ? 'lunch_out' : 'out';
+  }
+  return open.scheduled_end && now >= fromDbUtc(open.scheduled_end) ? 'out' : 'lunch_in';
+}
+
+// The time of the latest stamp on an open record, for "you just stamped" guards.
+function lastStampAt(open) {
+  return fromDbUtc(open.lunch_in || open.lunch_out || open.time_in);
+}
+
 // What a time clock shows before anyone presses anything: is the employee in, and the
 // shift a Time In now would be measured against.
 async function clockStatus(employeeId, now = new Date()) {
@@ -79,6 +112,7 @@ async function clockStatus(employeeId, now = new Date()) {
   const { workDate, schedule } = await currentWorkDate(employeeId, now);
   const [[todayLog]] = await pool.query(`${LOG_SELECT} WHERE l.employee_id = ? AND l.work_date = ?`, [employeeId, workDate]);
   return {
+    next_action: nextAction(open, todayLog, now),
     open_log: serializeLog(open),
     today: {
       work_date: workDate,
@@ -87,6 +121,8 @@ async function clockStatus(employeeId, now = new Date()) {
         start_time: schedule.start_time,
         end_time: schedule.end_time,
         grace_minutes: schedule.grace_minutes,
+        lunch_start: schedule.lunch_start || null,
+        lunch_end: schedule.lunch_end || null,
         scheduled_start_local: toLocalDisplay(toDbUtc(schedule.start)),
         scheduled_end_local: toLocalDisplay(toDbUtc(schedule.end)),
       } : null,
@@ -129,15 +165,44 @@ async function stampOut(employeeId, by = {}) {
   const open = await openLog(employeeId, now);
   if (!open) throw new HttpError(409, `No time-in from the last ${MAX_OPEN_HOURS} hours to time out of. Ask HR to correct an older record.`);
 
-  const remarks = by.remarks ? String(by.remarks).trim().slice(0, 255) : open.remarks;
+  let remarks = by.remarks ? String(by.remarks).trim().slice(0, 255) : open.remarks;
+  if (open.lunch_out && !open.lunch_in) remarks = [remarks, 'No lunch time-in'].filter(Boolean).join(' · ').slice(0, 255);
   await pool.query(
     // time_out IS NULL guards a double-tapped Time Out: the second one changes nothing.
     'UPDATE attendance_logs SET ?, time_out = ?, remarks = ? WHERE id = ? AND time_out IS NULL',
-    [{ ...metricsFor(open, fromDbUtc(open.time_in), now), ...(by.deviceId ? { out_device_id: by.deviceId } : {}) },
+    [{ ...metricsFor(open, fromDbUtc(open.time_in), now, lunchOf(open)), ...(by.deviceId ? { out_device_id: by.deviceId } : {}) },
       toDbUtc(now), remarks, open.id]
   );
   const [[row]] = await pool.query(`${LOG_SELECT} WHERE l.id = ?`, [open.id]);
   return serializeLog(row);
 }
 
-module.exports = { LOG_SELECT, serializeLog, openLog, currentWorkDate, clockStatus, stampIn, stampOut };
+// Lunch Out / Lunch In on the open record. `column` is 'lunch_out' or 'lunch_in'.
+async function stampLunch(employeeId, column) {
+  const now = new Date();
+  const open = await openLog(employeeId, now);
+  if (!open) throw new HttpError(409, 'Time in first.');
+  if (column === 'lunch_out' && open.lunch_out) throw new HttpError(409, `Already out to lunch since ${toLocalDisplay(open.lunch_out)}.`);
+  if (column === 'lunch_in' && !open.lunch_out) throw new HttpError(409, 'Stamp Lunch Out first.');
+  if (column === 'lunch_in' && open.lunch_in) throw new HttpError(409, `Already back from lunch at ${toLocalDisplay(open.lunch_in)}.`);
+  const lunch = { ...lunchOf(open), [column === 'lunch_out' ? 'lunchOut' : 'lunchIn']: now };
+  await pool.query(
+    `UPDATE attendance_logs SET ?, ${column} = ? WHERE id = ? AND ${column} IS NULL AND time_out IS NULL`,
+    [metricsFor(open, fromDbUtc(open.time_in), null, lunch), toDbUtc(now), open.id]
+  );
+  const [[row]] = await pool.query(`${LOG_SELECT} WHERE l.id = ?`, [open.id]);
+  return serializeLog(row);
+}
+
+// One stamp of any kind. `by` as for stampIn / stampOut.
+function stamp(employeeId, action, by) {
+  if (action === 'in') return stampIn(employeeId, by);
+  if (action === 'out') return stampOut(employeeId, by);
+  if (action === 'lunch_out' || action === 'lunch_in') return stampLunch(employeeId, action);
+  throw new HttpError(400, 'Unknown time clock action');
+}
+
+module.exports = {
+  LOG_SELECT, serializeLog, openLog, currentWorkDate, clockStatus, nextAction, lastStampAt,
+  stampIn, stampOut, stampLunch, stamp,
+};

@@ -100,6 +100,7 @@ const STEPS = [
   ['create-payroll.js', 'payroll: rule sets, holidays, allowances, loans and semi-monthly runs'],
   ['add-contribution-overrides.js', 'contribution amounts set by hand, per employee and per payroll'],
   ['add-payroll-review.js', 'payroll checking (Noted By) before approval'],
+  ['add-shift-lunch.js', 'lunch stamps, late blocks and half-day lateness per shift'],
 
   // Last: registers any page the migrations above did not, and gives the seeded admin an
   // account_type plus full access to everything.
