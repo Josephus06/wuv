@@ -23,9 +23,10 @@ function Sheet({ sheet, from, to }) {
   const { employee: e, days, totals } = sheet;
   return (
     <section className="dtr-sheet">
+      {/* The company letterhead, as on the Word template (public/dtr-letterhead.jpg). */}
+      <img className="dtr-letterhead" src="/dtr-letterhead.jpg" alt={e.company_name || COMPANY.name} />
       <header className="dtr-head">
-        <div className="dtr-company">{e.company_name || COMPANY.name}</div>
-        {e.branch_name && <div className="dtr-branch">{e.branch_name}</div>}
+        <div className="dtr-branch">{[e.company_name || COMPANY.name, e.branch_name].filter(Boolean).join(' · ')}</div>
         <h1>DAILY TIME RECORD</h1>
         <div className="dtr-period">{longDate(from)} – {longDate(to)}</div>
       </header>
