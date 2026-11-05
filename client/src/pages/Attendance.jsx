@@ -37,6 +37,7 @@ export default function Attendance() {
   const [form, setForm] = useState({});
   const [error, setError] = useState('');
   const [dtr, setDtr] = useState(null); // the Print DTR dialog's choices
+  const [photos, setPhotos] = useState(null); // { row, data } -- the time clock's photos of a record
 
   async function load(f = filters) {
     setLoading(true);
@@ -110,6 +111,16 @@ export default function Attendance() {
       load();
     } catch (err) {
       setLoadError(err.response?.data?.error || 'Could not re-measure');
+    }
+  }
+
+  async function openPhotos(row) {
+    setPhotos({ row, data: null });
+    try {
+      const { data } = await api.get(`/attendance/${row.log_id}/photos`);
+      setPhotos({ row, data });
+    } catch (err) {
+      setPhotos({ row, data: { error: err.response?.data?.error || 'Could not load the photos' } });
     }
   }
 
@@ -238,6 +249,7 @@ export default function Attendance() {
           <span className={`badge ${statusBadgeClass(r.status)}`}>{r.status}</span>
           {r.source === 'manual' && <div className="muted" style={{ fontSize: 11 }}>entered by HR</div>}
           {r.source === 'kiosk' && <div className="muted" style={{ fontSize: 11 }}>via time clock</div>}
+          {r.face_unverified && <div><span className="badge badge-danger" style={{ marginTop: 4 }}>Face not verified</span></div>}
           {r.source === 'import' && <div className="muted" style={{ fontSize: 11 }}>imported</div>}
           {r.source === 'self' && r.edited && <div className="muted" style={{ fontSize: 11 }}>corrected</div>}
           {r.remarks && <div className="muted" style={{ fontSize: 11 }} title={r.remarks}>{r.remarks}</div>}
@@ -337,6 +349,7 @@ export default function Attendance() {
             actions={(row) => (
               <>
                 {row.log_id && can('/attendance', 'can_edit') && <button className="btn btn-sm" onClick={() => openEdit(row)}>Edit</button>}
+                {row.photo_count > 0 && <button className="btn btn-sm" onClick={() => openPhotos(row)}>Photos</button>}
                 {!row.log_id && can('/attendance', 'can_add') && (
                   <button className="btn btn-sm" onClick={() => openAdd(row)}>Add Record</button>
                 )}
@@ -406,6 +419,42 @@ export default function Attendance() {
               <button type="submit" className="btn btn-primary">Open DTR</button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {photos && (
+        <Modal title={`Time Clock Photos · ${photos.row.employee_name} · ${formatDate(photos.row.work_date)}`} onClose={() => setPhotos(null)} large>
+          {!photos.data ? <LoadingSpinner /> : photos.data.error ? <div className="error-banner">{photos.data.error}</div> : (
+            <>
+              {photos.data.face_unverified && (
+                <p className="warning-banner">A stamp was let through after the face did not match 3 times. Compare the photos with the registered face.</p>
+              )}
+              <div className="stamp-photos">
+                {photos.data.registered_photo && (
+                  <figure>
+                    <img src={photos.data.registered_photo} alt="Registered face" />
+                    <figcaption><strong>Registered face</strong></figcaption>
+                  </figure>
+                )}
+                {photos.data.photos.map((p, i) => (
+                  <figure key={i}>
+                    <img src={p.photo} alt={p.action} />
+                    <figcaption>
+                      <strong>{{ in: 'Time In', lunch_out: 'Lunch Out', lunch_in: 'Lunch In', out: 'Time Out' }[p.action] || p.action}</strong>
+                      {' · '}{formatLocalTime(p.taken_local)}
+                      <div>
+                        {p.verified === true && <span className="badge badge-success">Face matched</span>}
+                        {p.verified === false && <span className="badge badge-danger">Not verified</span>}
+                        {p.verified === null && <span className="badge badge-muted">No face registered</span>}
+                      </div>
+                      {p.device_name && <div className="muted">{p.device_name}</div>}
+                    </figcaption>
+                  </figure>
+                ))}
+              </div>
+              <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>Photos are kept for 60 days.</p>
+            </>
+          )}
         </Modal>
       )}
 

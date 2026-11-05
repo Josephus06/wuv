@@ -3,6 +3,7 @@ import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import Modal from './Modal';
 import LoadingSpinner from './LoadingSpinner';
+import FaceEnroll from './FaceEnroll';
 import { parseUtc } from '../utils/datetime';
 
 const displayDateTime = (v) => parseUtc(v)?.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) || '';
@@ -355,6 +356,7 @@ export default function EmployeeProfileModal({ employeeId, isHr, departments, co
                   {employeeId && contrib && <Contributions employeeId={employeeId} saved={contrib} onChange={setContrib} />}
                   <TimeClockPin employeeId={employeeId} isSet={pinSet} onChange={setPinSet} />
                   <TimeClockQr employeeId={employeeId} isSet={qrSet} onChange={setQrSet} />
+                  <TimeClockFace employeeId={employeeId} />
                 </>
               )}
 
@@ -533,6 +535,91 @@ function Contributions({ employeeId, saved, onChange }) {
       </div>
       {err && <div className="error-banner">{err}</div>}
       {msg && !dirty && <div className="muted" style={{ fontSize: 12 }}>{msg}</div>}
+    </div>
+  );
+}
+
+// The face the branch time clock checks on every stamp. Registered here with this PC's webcam,
+// or at the time clock with a 15-minute code made here.
+function TimeClockFace({ employeeId }) {
+  const [face, setFace] = useState(null);
+  const [enrolling, setEnrolling] = useState(false);
+  const [code, setCode] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    if (!employeeId) return;
+    api.get(`/kiosk-admin/face/${employeeId}`).then(({ data }) => setFace(data)).catch(() => setFace(null));
+  }, [employeeId]);
+
+  async function save(samples) {
+    const { data } = await api.post(`/kiosk-admin/face/${employeeId}`, { samples, consent: true });
+    setFace(data);
+    setEnrolling(false);
+  }
+
+  async function makeCode() {
+    setBusy(true); setErr('');
+    try {
+      const { data } = await api.post(`/kiosk-admin/face/${employeeId}/code`);
+      setCode(data);
+    } catch (e) { setErr(e.response?.data?.error || 'Could not make a code.'); }
+    setBusy(false);
+  }
+
+  async function remove() {
+    if (!confirm('Remove this employee’s registered face? The time clock stops checking their face until it is registered again.')) return;
+    setBusy(true); setErr('');
+    try {
+      await api.delete(`/kiosk-admin/face/${employeeId}`);
+      setFace({ registered: false, samples: 0, photos: [] });
+    } catch (e) { setErr(e.response?.data?.error || 'Could not remove the face.'); }
+    setBusy(false);
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 14, background: 'var(--panel-2, transparent)' }}>
+      <h4 style={{ margin: '0 0 6px' }}>Time Clock Face</h4>
+      {!employeeId ? (
+        <div className="muted" style={{ fontSize: 13 }}>Save the employee first, then register their face here.</div>
+      ) : enrolling ? (
+        <FaceEnroll onSave={save} onCancel={() => setEnrolling(false)} />
+      ) : (
+        <>
+          <div style={{ marginBottom: 8 }}>
+            {face?.registered
+              ? <span className="badge badge-success">Face registered</span>
+              : <span className="badge badge-muted">No face</span>}
+            <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>
+              {face?.registered
+                ? `${face.samples} photos · ${displayDateTime(face.registered_at)}${face.registered_by ? ` by ${face.registered_by}` : ''}`
+                : 'The time clock checks the face on every stamp once it is registered.'}
+            </span>
+          </div>
+          {face?.photos?.length > 0 && (
+            <div className="face-enroll-shots" style={{ justifyContent: 'flex-start', marginBottom: 8 }}>
+              {face.photos.map((p, i) => <img key={i} src={p} alt={`Registered photo ${i + 1}`} />)}
+            </div>
+          )}
+          {code && (
+            <div style={{ marginBottom: 8 }}>
+              <div className="pin-reveal">{code.code}</div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                At the time clock, tap <strong>Register face</strong> and enter this code. It works once, for {code.minutes} minutes.
+              </div>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => { setEnrolling(true); setCode(null); }}>
+              {face?.registered ? 'Register Again (webcam)' : 'Register with Webcam'}
+            </button>
+            <button type="button" className="btn btn-sm" disabled={busy} onClick={makeCode}>Code for Time Clock</button>
+            {face?.registered && <button type="button" className="btn btn-sm" disabled={busy} onClick={remove}>Remove Face</button>}
+          </div>
+          {err && <div className="error-banner" style={{ marginTop: 8 }}>{err}</div>}
+        </>
+      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@ const { requireAuth, requirePermission } = require('../middleware/auth');
 const {
   newPin, pinHash, newDeviceToken, tokenHash, qrCode,
 } = require('../lib/kiosk');
+const { registerFace, faceStatus, newFaceCode } = require('../lib/kioskFace');
 
 const router = express.Router();
 const ROUTE = '/kiosk-devices';
@@ -174,6 +175,42 @@ router.get('/qr-badges', requireAuth, requirePermission('/employees', 'can_edit'
       params
     );
     res.json(rows.map(badge));
+  } catch (err) { next(err); }
+});
+
+// --- Faces (part of the employee record: Edit on Employees) ----------------------------
+// Registered here from a PC webcam, or at the time clock with a code made here.
+
+router.get('/face/:employeeId', requireAuth, requirePermission('/employees', 'can_edit'), async (req, res, next) => {
+  try {
+    res.json(await faceStatus(req.params.employeeId));
+  } catch (err) { next(err); }
+});
+
+router.post('/face/:employeeId', requireAuth, requirePermission('/employees', 'can_edit'), async (req, res, next) => {
+  try {
+    const [[emp]] = await pool.query('SELECT id FROM employees WHERE id = ?', [req.params.employeeId]);
+    if (!emp) return res.status(404).json({ error: 'Not found' });
+    if (req.body?.consent !== true) return res.status(400).json({ error: 'Confirm the employee signed the consent form first.' });
+    const result = await registerFace({ employeeId: emp.id, samples: req.body?.samples, userId: req.user.id });
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json(await faceStatus(emp.id));
+  } catch (err) { next(err); }
+});
+
+router.delete('/face/:employeeId', requireAuth, requirePermission('/employees', 'can_edit'), async (req, res, next) => {
+  try {
+    await pool.query('DELETE FROM employee_faces WHERE employee_id = ?', [req.params.employeeId]);
+    await pool.query('DELETE FROM face_codes WHERE employee_id = ?', [req.params.employeeId]);
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+router.post('/face/:employeeId/code', requireAuth, requirePermission('/employees', 'can_edit'), async (req, res, next) => {
+  try {
+    const [[emp]] = await pool.query('SELECT id FROM employees WHERE id = ?', [req.params.employeeId]);
+    if (!emp) return res.status(404).json({ error: 'Not found' });
+    res.json(await newFaceCode(emp.id, req.user.id));
   } catch (err) { next(err); }
 });
 

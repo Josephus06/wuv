@@ -12,6 +12,7 @@ const {
   LOG_SELECT, serializeLog, clockStatus, stampIn, stampOut, stampLunch,
 } = require('../lib/timeClock');
 const { readFirstSheet } = require('../lib/xlsx');
+const { toDataUrl } = require('../lib/kioskFace');
 const { parseAttendanceSheet, matchEmployee, matchShift } = require('../lib/attendanceImport');
 
 const router = express.Router();
@@ -266,6 +267,13 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
       [from, to, ...empParams]
     );
     const logMap = new Map(logs.map((l) => [`${l.employee_id}|${l.work_date}`, l]));
+    const photoCounts = new Map();
+    if (logs.length) {
+      const [counts] = await pool.query(
+        'SELECT log_id, COUNT(*) AS n FROM attendance_stamp_photos WHERE log_id IN (?) GROUP BY log_id', [logs.map((l) => l.id)]
+      ).catch((err) => (err.code === 'ER_NO_SUCH_TABLE' ? [[]] : Promise.reject(err))); // before add-kiosk-face.js
+      for (const c of counts) photoCounts.set(c.log_id, c.n);
+    }
 
     // Inactive employees are only listed for days they actually have a record.
     const [employees] = await pool.query(
@@ -310,6 +318,8 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
           lunch_in_local: s ? s.lunch_in_local : null,
           has_lunch: log ? !!log.scheduled_lunch_start : !!assignment.lunch_start,
           halfday_absent: !!(log && log.halfday_absent),
+          face_unverified: !!(log && log.face_unverified),
+          photo_count: log ? photoCounts.get(log.id) || 0 : 0,
           late_minutes: log ? log.late_minutes : 0,
           undertime_minutes: log ? log.undertime_minutes : 0,
           overtime_minutes: log ? (log.approved_ot_minutes ?? log.overtime_minutes) : 0,
@@ -618,6 +628,36 @@ router.post('/import', requireAuth, requirePermission(ROUTE, 'can_add'), async (
     next(err);
   } finally {
     conn.release();
+  }
+});
+
+// The time clock's photos of a record's stamps (kept 60 days), with the face check result,
+// and the employee's registered face to compare against.
+router.get('/:id/photos', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
+  try {
+    const [[log]] = await pool.query('SELECT id, employee_id, face_unverified FROM attendance_logs WHERE id = ?', [req.params.id]);
+    if (!log) return res.status(404).json({ error: 'Not found' });
+    const [photos] = await pool.query(
+      `SELECT p.action, p.photo, p.face_distance, p.verified, p.taken_at, d.name AS device_name
+       FROM attendance_stamp_photos p LEFT JOIN kiosk_devices d ON d.id = p.device_id
+       WHERE p.log_id = ? ORDER BY p.taken_at`,
+      [log.id]
+    );
+    const [[face]] = await pool.query('SELECT photo FROM employee_faces WHERE employee_id = ? AND photo IS NOT NULL ORDER BY id LIMIT 1', [log.employee_id]);
+    res.json({
+      face_unverified: !!log.face_unverified,
+      registered_photo: face ? toDataUrl(face.photo) : null,
+      photos: photos.map((p) => ({
+        action: p.action,
+        photo: toDataUrl(p.photo),
+        face_distance: p.face_distance === null ? null : Number(p.face_distance),
+        verified: p.verified === null ? null : !!p.verified,
+        taken_local: toLocalDisplay(p.taken_at),
+        device_name: p.device_name,
+      })),
+    });
+  } catch (err) {
+    next(err);
   }
 });
 

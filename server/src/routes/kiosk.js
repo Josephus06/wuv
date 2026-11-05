@@ -4,6 +4,7 @@
 //      device's camera.
 // Everything is refused without a live device token, so the PIN pad cannot be reached from
 // an arbitrary browser, and wrong PINs are throttled per device (lib/kiosk.js).
+// Every stamp also checks the employee's face against the one HR registered (lib/kioskFace.js).
 //
 // Never answers 401: the web client treats 401 as "your session ended" and sends the page
 // to /login, which a kiosk has no use for.
@@ -14,6 +15,7 @@ const { clockStatus, lastStampAt, stamp } = require('../lib/timeClock');
 const {
   PIN_RE, pinHash, tokenHash, lockedFor, recordFailure, clearFailures, parseQr,
 } = require('../lib/kiosk');
+const { checkFace, recordStampFace, registerFace, faceCodeOwner } = require('../lib/kioskFace');
 
 const router = express.Router();
 
@@ -107,10 +109,13 @@ router.post('/:token/punch', async (req, res, next) => {
     if (action !== expected && !(action === 'out' && expected === 'lunch_out')) {
       throw new HttpError(409, 'This screen is out of date. Enter your PIN again.');
     }
+    const face = await checkFace({ deviceId: device.id, employeeId: emp.id, face: req.body?.face });
+    if (face.retry) return res.status(409).json({ error: face.message, face_retry: true, attempts_left: face.attemptsLeft });
     const log = await stamp(emp.id, action, { source: 'kiosk', deviceId: device.id });
+    await recordStampFace({ log, employeeId: emp.id, action, deviceId: device.id, check: face });
     await pool.query('UPDATE kiosk_devices SET last_used_at = NOW() WHERE id = ?', [device.id]);
-    res.status(action === 'in' ? 201 : 200).json({ employee: who(emp), action, log });
-  } catch (err) { next(err); }
+    return res.status(action === 'in' ? 201 : 200).json({ employee: who(emp), action, log, face_verified: face.verified });
+  } catch (err) { return next(err); }
 });
 
 // QR: one scan is the whole stamp -- the badge says who, and the employee's state says which
@@ -130,10 +135,52 @@ router.post('/:token/scan', async (req, res, next) => {
       return res.json({ employee: who(emp), action: 'recent', log: status.open_log, ...status });
     }
     const action = status.next_action;
+    const face = await checkFace({ deviceId: device.id, employeeId: emp.id, face: req.body?.face });
+    if (face.retry) {
+      return res.status(409).json({ error: face.message, face_retry: true, attempts_left: face.attemptsLeft, employee: who(emp) });
+    }
     const log = await stamp(emp.id, action, { source: 'kiosk', deviceId: device.id });
+    await recordStampFace({ log, employeeId: emp.id, action, deviceId: device.id, check: face });
     await pool.query('UPDATE kiosk_devices SET last_used_at = NOW() WHERE id = ?', [device.id]);
-    return res.status(action === 'in' ? 201 : 200).json({ employee: who(emp), action, log });
+    return res.status(action === 'in' ? 201 : 200).json({ employee: who(emp), action, log, face_verified: face.verified });
   } catch (err) { return next(err); }
+});
+
+// Registering a face at the time clock, with the 6-digit code HR made in the employee's
+// profile (valid 15 minutes, used once). Wrong codes are throttled like PINs.
+async function codeFor(req, device) {
+  const key = `face:${device.id}`;
+  const wait = lockedFor(key);
+  if (wait > 0) throw new HttpError(429, `Too many wrong codes. Try again in ${Math.ceil(wait / 1000)} seconds.`);
+  const owner = await faceCodeOwner(req.body?.code);
+  if (!owner) {
+    recordFailure(key);
+    throw new HttpError(404, 'Code not recognised or expired. Ask HR for a new one.');
+  }
+  clearFailures(key);
+  const [[emp]] = await pool.query(`${EMPLOYEE_SELECT} WHERE e.id = ?`, [owner.employee_id]);
+  if (!emp || !emp.is_active) throw new HttpError(404, 'This employee is not active.');
+  return { owner, emp };
+}
+
+router.post('/:token/face-code', async (req, res, next) => {
+  try {
+    const device = await deviceFor(req.params.token);
+    const { emp } = await codeFor(req, device);
+    res.json({ employee: who(emp) });
+  } catch (err) { next(err); }
+});
+
+router.post('/:token/face-register', async (req, res, next) => {
+  try {
+    const device = await deviceFor(req.params.token);
+    const { owner, emp } = await codeFor(req, device);
+    if (req.body?.consent !== true) throw new HttpError(400, 'Confirm the employee signed the consent form first.');
+    const result = await registerFace({ employeeId: emp.id, samples: req.body?.samples, userId: owner.created_by_user_id, deviceId: device.id });
+    if (result.error) throw new HttpError(400, result.error);
+    await pool.query('DELETE FROM face_codes WHERE id = ?', [owner.id]);
+    res.json({ employee: who(emp), samples: result.samples });
+  } catch (err) { next(err); }
 });
 
 module.exports = router;

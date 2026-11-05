@@ -6,7 +6,9 @@ import jsQR from 'jsqr';
 // Chrome has none). The camera needs HTTPS, which the live site has.
 //
 // `paused` stops reading (not the camera) while the kiosk shows a result, so the camera does
-// not have to start again for the next person.
+// not have to start again for the next person. `scanQr={false}` keeps the camera without
+// reading codes (the face check on the PIN screen, face registration); `onVideo` hands the
+// <video> to whoever reads faces from it.
 
 const SCAN_EVERY_MS = 180;
 const MAX_WIDTH = 640; // frames are scaled down before jsQR reads them: faster, and enough
@@ -19,12 +21,16 @@ function cameraMessage(err) {
   return 'Could not start the camera.';
 }
 
-export default function QrScanner({ onScan, onError, paused = false, facing = 'user' }) {
+export default function QrScanner({
+  onScan, onError, onVideo, paused = false, facing = 'user', scanQr = true, compact = false,
+}) {
   const video = useRef(null);
   const onScanRef = useRef(onScan);
   const pausedRef = useRef(paused);
+  const scanRef = useRef(scanQr);
   onScanRef.current = onScan;
   pausedRef.current = paused;
+  scanRef.current = scanQr;
 
   useEffect(() => {
     let stream = null;
@@ -55,7 +61,7 @@ export default function QrScanner({ onScan, onError, paused = false, facing = 'u
     async function tick() {
       if (stopped) return;
       const v = video.current;
-      if (v && !pausedRef.current && v.readyState >= 2 && v.videoWidth) {
+      if (v && scanRef.current && !pausedRef.current && v.readyState >= 2 && v.videoWidth) {
         try {
           const text = await read(v);
           if (text && !stopped && !pausedRef.current) onScanRef.current(text);
@@ -75,6 +81,7 @@ export default function QrScanner({ onScan, onError, paused = false, facing = 'u
         video.current.srcObject = s;
         video.current.play().catch(() => {});
         onError?.('');
+        onVideo?.(video.current);
         tick();
       })
       .catch((err) => onError?.(cameraMessage(err)));
@@ -84,13 +91,13 @@ export default function QrScanner({ onScan, onError, paused = false, facing = 'u
       clearTimeout(timer);
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, [facing, onError]);
+  }, [facing, onError]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="qr-scanner">
+    <div className={`qr-scanner${compact ? ' is-compact' : ''}`}>
       {/* The front camera is mirrored, like a mirror: moving the badge left moves it left. */}
       <video ref={video} className={facing === 'user' ? 'is-mirrored' : ''} playsInline muted />
-      <div className="qr-scanner-frame" />
+      {scanQr ? <div className="qr-scanner-frame" /> : <div className="qr-scanner-face" />}
     </div>
   );
 }
