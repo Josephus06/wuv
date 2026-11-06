@@ -177,7 +177,9 @@ async function buildDtr(employeeIds, from, to) {
       } else if (!planned) {
         totals.rest += 1;
         remarks.push('Rest day');
-      } else if (!holiday && scheduleFor(date, planned).end < now) {
+      } else if (scheduleFor(date, planned).end < now) {
+        // Scheduled on a holiday and did not come in is absent too; payroll still decides
+        // what the day pays (an unworked regular holiday can be paid).
         totals.absent += 1;
         remarks.push('Absent');
       }
