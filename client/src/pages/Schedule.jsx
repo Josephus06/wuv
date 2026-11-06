@@ -84,6 +84,19 @@ export default function Schedule() {
   }
 
   const shiftById = useMemo(() => new Map((data?.shifts || []).map((s) => [String(s.id), s])), [data]);
+  // The branch's own shifts (and those for any branch) first; other branches' grouped below,
+  // for someone working at another branch for the day.
+  const ownShifts = useMemo(() => (data?.shifts || []).filter((s) => !s.branch_id || String(s.branch_id) === String(branchId)), [data, branchId]);
+  const otherShifts = useMemo(() => {
+    const groups = new Map();
+    for (const s of data?.shifts || []) {
+      if (!s.branch_id || String(s.branch_id) === String(branchId)) continue;
+      const key = s.branch_name || 'Other branch';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(s);
+    }
+    return [...groups.entries()];
+  }, [data, branchId]);
 
   // A cell's current value: an unsaved change, else what is plotted, else 'default'.
   function cellValue(emp, date) {
@@ -233,7 +246,12 @@ export default function Schedule() {
                             title={eff.kind === 'shift' ? `${eff.shift.shift_name}: ${formatClock(eff.shift.start_time)} – ${formatClock(eff.shift.end_time)}` : 'Rest day'}>
                             <option value="default">Default{def ? ` (${shortName(def.shift_name)})` : ' (Rest)'}</option>
                             <option value="rest">Rest day</option>
-                            {data.shifts.map((s) => <option key={s.id} value={String(s.id)}>{shortName(s.name)}</option>)}
+                            {ownShifts.map((s) => <option key={s.id} value={String(s.id)}>{shortName(s.name)}</option>)}
+                            {otherShifts.map(([branch, list]) => (
+                              <optgroup key={branch} label={branch}>
+                                {list.map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+                              </optgroup>
+                            ))}
                           </select>
                           <div className="schedule-time">
                             {eff.kind === 'shift' ? `${formatClock(eff.shift.start_time)}–${formatClock(eff.shift.end_time)}` : 'Rest'}

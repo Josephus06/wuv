@@ -44,10 +44,13 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
        FROM employees WHERE branch_id = ? AND is_active = TRUE ORDER BY first_name, last_name`,
       [branchId]
     );
+    // This branch's shifts first, then the ones for any branch, then every other branch's --
+    // someone lent to SM Seaside for the day is plotted on a Seaside shift.
     const [shifts] = await pool.query(
-      `SELECT id, name, start_time, end_time, branch_id FROM shifts
-       WHERE is_active = TRUE AND (branch_id = ? OR branch_id IS NULL)
-       ORDER BY branch_id IS NULL, start_time, name`,
+      `SELECT s.id, s.name, s.start_time, s.end_time, s.branch_id, l.location_name AS branch_name
+       FROM shifts s LEFT JOIN locations l ON l.id = s.branch_id
+       WHERE s.is_active = TRUE
+       ORDER BY s.branch_id <=> ? DESC, s.branch_id IS NULL DESC, l.location_name, s.start_time, s.name`,
       [branchId]
     );
     const sources = await scheduleSources(employees.map((e) => e.id), weekStart, weekEnd);
