@@ -60,6 +60,8 @@ function readBody(body) {
   if (lateBlock !== null && (!Number.isInteger(lateBlock) || lateBlock < 1 || lateBlock > 240)) return { error: 'Late block must be 1 to 240 minutes, or blank' };
   if (halfdayLate !== null && (!Number.isInteger(halfdayLate) || halfdayLate < 1 || halfdayLate > 480)) return { error: 'Half-day late must be 1 to 480 minutes, or blank' };
   if (!Number.isInteger(utGrace) || utGrace < 0 || utGrace > 240) return { error: 'Time-out grace must be a whole number from 0 to 240' };
+  const utBlock = optMinutes(body.undertime_block_minutes);
+  if (utBlock !== null && (!Number.isInteger(utBlock) || utBlock < 1 || utBlock > 240)) return { error: 'Undertime block must be 1 to 240 minutes, or blank' };
 
   return {
     values: {
@@ -74,6 +76,7 @@ function readBody(body) {
       late_block_minutes: lateBlock,
       halfday_late_minutes: halfdayLate,
       undertime_grace_minutes: utGrace,
+      undertime_block_minutes: utBlock,
       branch_id: body.branch_id ? Number(body.branch_id) : null,
       description: body.description ? String(body.description).trim() : null,
       is_active: body.is_active ?? true,

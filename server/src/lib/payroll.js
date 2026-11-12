@@ -25,9 +25,9 @@
 //     other half's lateness and undertime still come off.
 //
 //   Overtime and night differential are paid unless the profile says Compute Overtime Pay =
-//   No (managerial staff). Overtime is the record's approved overtime when one is set, else
-//   the time after the scheduled end -- on an unscheduled day, whatever is past 8 hours --
-//   counted in whole blocks (30 minutes by default).
+//   No (managerial staff). Overtime is only what HR approved on the record (Approved
+//   Overtime); time past the shift end is not overtime by itself. It is counted in whole
+//   blocks (30 minutes by default).
 //
 // WHAT IS NOT DONE HERE: a pay-rate change mid-cutoff (the rate in force on the last day is
 // used for the whole cutoff), leave (an absence is an absence until leave exists), and 13th
@@ -263,15 +263,15 @@ function computeEmployee(emp, comp, ctx) {
         // Paid breaks (outside Shift In / Out) are part of the day's paid time.
         const schedMin = Math.max(0, minutesBetween(log.scheduled_start, log.scheduled_end) - (log.break_minutes || 0) + (log.paid_break_minutes || 0));
         regMin = Math.max(0, Math.min(schedMin, fullDayMin) * (halfday ? 0.5 : 1) - log.late_minutes - log.undertime_minutes);
-        otRaw = log.overtime_minutes;
+        otRaw = 0;
         lateMin += log.late_minutes;
         undertimeMin += log.undertime_minutes;
       } else {
         regMin = Math.min(log.worked_minutes, fullDayMin);
-        otRaw = Math.max(0, log.worked_minutes - fullDayMin);
+        otRaw = 0;
       }
-      // Overtime a supervisor approved for the day replaces the measured figure: it pays an
-      // approved early start, and not staying late that nobody approved.
+      // Only overtime HR approved is paid -- an approved early start included; staying late
+      // that nobody approved is not.
       if (log.approved_ot_minutes !== null && log.approved_ot_minutes !== undefined) otRaw = log.approved_ot_minutes;
 
       if (monthly) {

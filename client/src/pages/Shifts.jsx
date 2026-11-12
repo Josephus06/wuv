@@ -10,6 +10,7 @@ const EMPTY = {
   name: '', start_time: '08:00', end_time: '17:00', grace_minutes: 0, break_minutes: 60, paid_break_minutes: 0,
   branch_id: '', description: '', is_active: true,
   lunch_start: '', lunch_end: '', late_block_minutes: '', halfday_late_minutes: '', undertime_grace_minutes: 0,
+  undertime_block_minutes: '',
 };
 
 export default function Shifts() {
@@ -52,6 +53,7 @@ export default function Shifts() {
       late_block_minutes: row.late_block_minutes ?? '',
       halfday_late_minutes: row.halfday_late_minutes ?? '',
       undertime_grace_minutes: row.undertime_grace_minutes || 0,
+      undertime_block_minutes: row.undertime_block_minutes ?? '',
       branch_id: row.branch_id || '',
       description: row.description || '',
       is_active: !!row.is_active,
@@ -123,6 +125,7 @@ export default function Shifts() {
           {r.late_block_minutes > 0 && <div className="muted" style={{ fontSize: 11 }}>late in {r.late_block_minutes}-min blocks</div>}
           {r.halfday_late_minutes > 0 && <div className="muted" style={{ fontSize: 11 }}>{formatMinutes(r.halfday_late_minutes)}+ late = half day</div>}
           {r.undertime_grace_minutes > 0 && <div className="muted" style={{ fontSize: 11 }}>{formatMinutes(r.undertime_grace_minutes)} time-out grace</div>}
+          {r.undertime_block_minutes > 0 && <div className="muted" style={{ fontSize: 11 }}>undertime in {formatMinutes(r.undertime_block_minutes)} blocks</div>}
         </>
       ),
     },
@@ -236,15 +239,22 @@ export default function Shifts() {
                 <input type="number" min="1" max="480" placeholder="e.g. 60" value={form.halfday_late_minutes} onChange={(e) => setForm({ ...form, halfday_late_minutes: e.target.value })} />
               </div>
             </div>
-            <div className="field">
-              <label>Time-out grace (minutes before end that are not undertime)</label>
-              <input type="number" min="0" max="240" value={form.undertime_grace_minutes} onChange={(e) => setForm({ ...form, undertime_grace_minutes: e.target.value })} />
+            <div className="field-row">
+              <div className="field">
+                <label>Time-out grace (minutes before end that are not undertime)</label>
+                <input type="number" min="0" max="240" value={form.undertime_grace_minutes} onChange={(e) => setForm({ ...form, undertime_grace_minutes: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>Undertime counted in blocks of (minutes)</label>
+                <input type="number" min="1" max="240" placeholder="e.g. 60" value={form.undertime_block_minutes} onChange={(e) => setForm({ ...form, undertime_block_minutes: e.target.value })} />
+              </div>
             </div>
             <p className="muted" style={{ marginTop: -4 }}>
               With a lunch set, employees stamp four times a day: Time In, Lunch Out, Lunch In, Time Out. Back after
               the &ldquo;Lunch In by&rdquo; time is late (no grace). With late blocks, lateness counts from the end of the grace
               period and goes up in blocks: 1–30 minutes late is 30, 31–60 is 60. Late by the half-day amount or more (morning
-              or after lunch) is half a day absent instead.
+              or after lunch) is half a day absent instead (61 = more than an hour). Undertime blocks of 60: leaving 1–60
+              minutes early is 1 hour.
             </p>
             <div className="field">
               <label>Description</label>

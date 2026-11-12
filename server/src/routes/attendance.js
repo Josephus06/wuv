@@ -166,7 +166,7 @@ async function buildDtr(employeeIds, from, to) {
         totals.present += 1;
         totals.late_minutes += log.late_minutes;
         totals.undertime_minutes += log.undertime_minutes;
-        totals.overtime_minutes += log.approved_ot_minutes ?? log.overtime_minutes;
+        totals.overtime_minutes += log.approved_ot_minutes || 0; // overtime only once HR approved it
         totals.worked_minutes += log.worked_minutes;
         if (!schedule) remarks.push('Worked on rest day');
         if (!log.time_out) remarks.push(now - fromDbUtc(log.time_in) > MAX_OPEN_HOURS * 3600000 ? 'No time out' : 'On duty');
@@ -191,7 +191,7 @@ async function buildDtr(employeeIds, from, to) {
         time_out_local: s ? s.time_out_local : null,
         late_minutes: log ? log.late_minutes : 0,
         undertime_minutes: log ? log.undertime_minutes : 0,
-        overtime_minutes: log ? (log.approved_ot_minutes ?? log.overtime_minutes) : 0,
+        overtime_minutes: log ? log.approved_ot_minutes || 0 : 0,
         worked_minutes: log ? log.worked_minutes : 0,
         remarks,
       };
@@ -324,8 +324,10 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
           photo_count: log ? photoCounts.get(log.id) || 0 : 0,
           late_minutes: log ? log.late_minutes : 0,
           undertime_minutes: log ? log.undertime_minutes : 0,
-          overtime_minutes: log ? (log.approved_ot_minutes ?? log.overtime_minutes) : 0,
+          // Overtime is only what HR approved; time past the shift end waits for that decision.
+          overtime_minutes: log ? log.approved_ot_minutes || 0 : 0,
           approved_ot_minutes: log ? log.approved_ot_minutes ?? null : null,
+          unapproved_ot_minutes: log && (log.approved_ot_minutes === null || log.approved_ot_minutes === undefined) ? log.overtime_minutes : 0,
           worked_minutes: log ? log.worked_minutes : 0,
           source: log ? log.source : null,
           remarks: log ? log.remarks : null,
@@ -462,6 +464,7 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
       late_block_minutes: snapshot.late_block_minutes ?? null,
       halfday_late_minutes: snapshot.halfday_late_minutes ?? null,
       undertime_grace_minutes: snapshot.undertime_grace_minutes || 0,
+      undertime_block_minutes: snapshot.undertime_block_minutes ?? null,
       time_in: toDbUtc(timeIn),
       time_out: timeOut ? toDbUtc(timeOut) : null,
       lunch_out: lunch.lunchOut ? toDbUtc(lunch.lunchOut) : null,

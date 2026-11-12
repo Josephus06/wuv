@@ -239,7 +239,18 @@ export default function Attendance() {
     },
     { key: 'late_minutes', label: 'Late', render: (r) => <>{formatMinutes(r.late_minutes)}{r.halfday_absent && <div className="muted" style={{ fontSize: 11 }}>half day absent</div>}</> },
     { key: 'undertime_minutes', label: 'Undertime', render: (r) => formatMinutes(r.undertime_minutes) },
-    { key: 'overtime_minutes', label: 'Overtime', render: (r) => <>{formatMinutes(r.overtime_minutes)}{r.approved_ot_minutes !== null && r.approved_ot_minutes !== undefined && r.log_id && <div className="muted" style={{ fontSize: 11 }}>approved</div>}</> },
+    {
+      key: 'overtime_minutes',
+      label: 'Overtime',
+      // Only approved overtime counts; time past the shift end is a hint for HR to approve.
+      render: (r) => (
+        <>
+          {formatMinutes(r.overtime_minutes)}
+          {r.overtime_minutes > 0 && <div className="muted" style={{ fontSize: 11 }}>approved</div>}
+          {r.unapproved_ot_minutes > 0 && <div className="muted" style={{ fontSize: 11 }}>{formatMinutes(r.unapproved_ot_minutes)} past shift, not approved</div>}
+        </>
+      ),
+    },
     { key: 'worked_minutes', label: 'Worked', render: (r) => formatMinutes(r.worked_minutes) },
     {
       key: 'status',
@@ -511,9 +522,9 @@ export default function Attendance() {
             <div className="field">
               <label>Approved Overtime (hours)</label>
               <input type="number" min="0" max="16" step="0.25" value={form.approved_ot_hours}
-                onChange={(e) => setForm({ ...form, approved_ot_hours: e.target.value })} placeholder="Blank = overtime after the shift end" />
+                onChange={(e) => setForm({ ...form, approved_ot_hours: e.target.value })} placeholder="Blank = no overtime" />
               <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-                When set, payroll pays exactly this much overtime for the day (0 = none approved).
+                Only approved overtime shows on the DTR and is paid. Time past the shift end is not overtime until entered here.
               </div>
             </div>
             <div className="field">

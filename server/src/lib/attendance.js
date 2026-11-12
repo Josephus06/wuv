@@ -143,7 +143,8 @@ function pickAssignment(assignments, workDate) {
 
 const SHIFT_FIELDS = `s.name AS shift_name, s.start_time, s.end_time, s.grace_minutes, s.break_minutes,
          COALESCE(s.paid_break_minutes, 0) AS paid_break_minutes, s.lunch_start, s.lunch_end,
-         s.late_block_minutes, s.halfday_late_minutes, COALESCE(s.undertime_grace_minutes, 0) AS undertime_grace_minutes`;
+         s.late_block_minutes, s.halfday_late_minutes, COALESCE(s.undertime_grace_minutes, 0) AS undertime_grace_minutes,
+         s.undertime_block_minutes`;
 
 const ASSIGNMENT_SELECT = `
   SELECT a.id AS assignment_id, a.employee_id, a.shift_id,
@@ -236,10 +237,14 @@ function minutesBetween(a, b) {
 //                    absent (halfday_absent) instead of late minutes.
 //   undertimeGrace   leaving this close to the end is not undertime; earlier counts from
 //                    that point (4:40 on a 5:00 end with 15 minutes is 5 minutes).
+//   undertimeBlock   undertime goes up in blocks: 60 = 1 to 60 minutes early is 1 hour.
+//
+// overtime_minutes is only the time past the scheduled end, as measured; it is not overtime
+// until HR approves it (approved_ot_minutes) -- see the attendance report and payroll.
 function computeMetrics({
   timeIn, timeOut, scheduledStart, scheduledEnd, graceMinutes = 0, breakMinutes = 0, paidBreakMinutes = 0,
   lunchStart = null, lunchEnd = null, lunchOut = null, lunchIn = null,
-  lateBlockMinutes = null, halfdayLateMinutes = null, undertimeGraceMinutes = 0,
+  lateBlockMinutes = null, halfdayLateMinutes = null, undertimeGraceMinutes = 0, undertimeBlockMinutes = null,
 }) {
   const blocks = lateBlockMinutes > 0;
   let halfday = false;
@@ -258,6 +263,7 @@ function computeMetrics({
   const endGap = scheduledEnd ? minutesBetween(timeOut, scheduledEnd) : 0;
   let undertime = endGap > undertimeGraceMinutes ? endGap - undertimeGraceMinutes : 0;
   if (lunchStart && lunchOut) undertime += Math.max(0, minutesBetween(lunchOut, lunchStart));
+  if (undertimeBlockMinutes > 0 && undertime > 0) undertime = Math.ceil(undertime / undertimeBlockMinutes) * undertimeBlockMinutes;
   const worked = lunchOut && lunchIn && lunchIn > lunchOut && timeOut > lunchIn
     ? minutesBetween(timeIn, lunchOut) + minutesBetween(lunchIn, timeOut) + paidBreakMinutes
     : (span > breakMinutes ? span - breakMinutes : span) + (span > breakMinutes ? paidBreakMinutes : 0);
@@ -286,6 +292,7 @@ function scheduleSnapshot(schedule) {
     late_block_minutes: schedule ? schedule.late_block_minutes ?? null : null,
     halfday_late_minutes: schedule ? schedule.halfday_late_minutes ?? null : null,
     undertime_grace_minutes: schedule ? schedule.undertime_grace_minutes || 0 : 0,
+    undertime_block_minutes: schedule ? schedule.undertime_block_minutes ?? null : null,
   };
 }
 
@@ -306,6 +313,7 @@ function metricsFor(snapshot, timeIn, timeOut, lunch = {}) {
     lateBlockMinutes: snapshot.late_block_minutes ?? null,
     halfdayLateMinutes: snapshot.halfday_late_minutes ?? null,
     undertimeGraceMinutes: snapshot.undertime_grace_minutes || 0,
+    undertimeBlockMinutes: snapshot.undertime_block_minutes ?? null,
   });
 }
 
