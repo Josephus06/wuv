@@ -27,7 +27,19 @@ const DEFAULT_RULES = {
     regular_holiday: 2.0,
     regular_holiday_rest_day: 2.6,
   },
-  // Overtime is the day's hourly rate times this: +25% on an ordinary day, +30% on any other.
+  // Overtime pay per hour by kind of day, as a multiple of the hourly rate (the Labor Code's
+  // +25% on an ordinary day, +30% of the day's rate on the others: 1.5 x 1.3 = 1.95 on a
+  // special holiday on a rest day).
+  overtime_rates: {
+    ordinary: 1.25,
+    rest_day: 1.69,
+    special_holiday: 1.69,
+    special_holiday_rest_day: 1.95,
+    regular_holiday: 2.6,
+    regular_holiday_rest_day: 3.38,
+  },
+  // Before overtime_rates: overtime was the day's rate times one of these. Kept to fill in
+  // overtime_rates for rate sets saved that way (withDefaults).
   overtime_multiplier_ordinary: 1.25,
   overtime_multiplier_other: 1.3,
   // Night differential: this share of the day's hourly rate for each hour between the two times.
@@ -87,6 +99,11 @@ function withDefaults(rules = {}) {
   for (const k of ['day_multipliers', 'sss', 'philhealth', 'pagibig']) {
     out[k] = { ...DEFAULT_RULES[k], ...(rules[k] || {}) };
   }
+  // A rate set saved before per-day overtime rates pays what it paid then: the day's rate
+  // times its old ordinary / other overtime multiplier.
+  const legacyOt = Object.fromEntries(Object.keys(DEFAULT_RULES.overtime_rates).map((k) => [k,
+    Math.round(out.day_multipliers[k] * (k === 'ordinary' ? out.overtime_multiplier_ordinary : out.overtime_multiplier_other) * 10000) / 10000]));
+  out.overtime_rates = { ...legacyOt, ...(rules.overtime_rates || {}) };
   const legacy = rules.contribution_schedule === 'second_cutoff' ? 'second' : 'split';
   out.contribution_cutoffs = { sss: legacy, philhealth: legacy, pagibig: legacy, ...(rules.contribution_cutoffs || {}) };
   delete out.contribution_schedule;
@@ -172,8 +189,9 @@ function dayKind({ scheduled, holidayType }) {
   return scheduled ? 'ordinary' : 'rest_day';
 }
 
-function overtimeMultiplier(kind, rules) {
-  return kind === 'ordinary' ? rules.overtime_multiplier_ordinary : rules.overtime_multiplier_other;
+// Overtime pay per hour for a kind of day, as a multiple of the hourly rate.
+function overtimeRate(kind, rules) {
+  return rules.overtime_rates[kind];
 }
 
 function toMinutes(hhmm) {
@@ -206,6 +224,6 @@ module.exports = {
   periodBrackets,
   withholdingTax,
   dayKind,
-  overtimeMultiplier,
+  overtimeRate,
   nightMinutes,
 };

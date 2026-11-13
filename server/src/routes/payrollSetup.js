@@ -60,9 +60,9 @@ router.get('/rule-sets', requireAuth, requirePermission(SETTINGS, 'can_view'), a
 });
 
 const NUMBER_PATHS = [
-  'hours_per_day', 'working_days_per_year', 'overtime_block_minutes', 'overtime_multiplier_ordinary',
-  'overtime_multiplier_other', 'night_differential_rate',
+  'hours_per_day', 'working_days_per_year', 'overtime_block_minutes', 'night_differential_rate',
   ...Object.keys(DEFAULT_RULES.day_multipliers).map((k) => `day_multipliers.${k}`),
+  ...Object.keys(DEFAULT_RULES.overtime_rates).map((k) => `overtime_rates.${k}`),
   ...Object.keys(DEFAULT_RULES.sss).map((k) => `sss.${k}`),
   ...Object.keys(DEFAULT_RULES.philhealth).map((k) => `philhealth.${k}`),
   ...Object.keys(DEFAULT_RULES.pagibig).map((k) => `pagibig.${k}`),
@@ -80,6 +80,9 @@ function readRules(input) {
   if (!(rules.hours_per_day > 0 && rules.hours_per_day <= 24)) return { error: 'Hours per day must be between 1 and 24' };
   if (!(rules.working_days_per_year >= 200 && rules.working_days_per_year <= 366)) return { error: 'Working days per year must be between 200 and 366' };
   if (!(rules.overtime_block_minutes >= 1)) return { error: 'Overtime block must be at least 1 minute' };
+  // Saved as per-day rates from now on; the old two multipliers only filled them in.
+  delete rules.overtime_multiplier_ordinary;
+  delete rules.overtime_multiplier_other;
   for (const k of ['sss', 'philhealth', 'pagibig']) {
     if (!['split', 'first', 'second'].includes(rules.contribution_cutoffs[k])) return { error: 'Choose the cutoff each contribution is deducted in' };
   }

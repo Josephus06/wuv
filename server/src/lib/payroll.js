@@ -38,7 +38,7 @@ const {
 } = require('./attendance');
 const {
   withDefaults, round2, sssContribution, philhealthContribution, pagibigContribution,
-  withholdingTax, dayKind, overtimeMultiplier, nightMinutes,
+  withholdingTax, dayKind, overtimeRate, nightMinutes,
 } = require('./payrollRules');
 
 const PERIODS_PER_YEAR = 24; // semi-monthly
@@ -304,7 +304,7 @@ function computeEmployee(emp, comp, ctx) {
         const otMin = Math.floor(otRaw / rules.overtime_block_minutes) * rules.overtime_block_minutes;
         if (otMin > 0) {
           otMinTotal += otMin;
-          bump(overtime, kind, otMin, (otMin / 60) * hourly * mult * overtimeMultiplier(kind, rules));
+          bump(overtime, kind, otMin, (otMin / 60) * hourly * overtimeRate(kind, rules));
         }
         const nd = nightMinutes(minutesFrom(date, toLocalDisplay(log.time_in)), minutesFrom(date, toLocalDisplay(log.time_out)), rules);
         if (nd > 0) {

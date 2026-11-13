@@ -190,9 +190,11 @@ export default function PayrollSettings() {
           <div className="settings-pairs">
             {Object.keys(DAY_LABELS).map((k) => <div key={k}>{pct(`day_multipliers.${k}`, DAY_LABELS[k])}</div>)}
           </div>
+          <p className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Overtime pay per hour, as a % of the hourly rate (only overtime HR approved).</p>
           <div className="settings-pairs">
-            {pct('overtime_multiplier_ordinary', 'Overtime, ordinary day', 'Of the day\'s hourly rate (125% = +25%)')}
-            {pct('overtime_multiplier_other', 'Overtime, other days', '130% = +30%')}
+            {Object.keys(DAY_LABELS).map((k) => <div key={k}>{pct(`overtime_rates.${k}`, `OT, ${DAY_LABELS[k].toLowerCase()}`)}</div>)}
+          </div>
+          <div className="settings-pairs">
             {pct('night_differential_rate', 'Night differential', 'Added per night hour')}
             <div className="field">
               <label>Night hours</label>
