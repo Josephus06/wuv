@@ -186,6 +186,35 @@ import ProcessCostingEdit from './pages/ProcessCostingEdit';
 import ProcessCostingView from './pages/ProcessCostingView';
 import MaterialCostEdit from './pages/MaterialCostEdit';
 import ReceivingReports from './pages/ReceivingReports';
+// Accounting reports, BIR Reports and Treasury from GSUITE (2026-11-18).
+import BankReconciliations from './pages/accounting/BankReconciliations';
+import BankReconciliationView from './pages/accounting/BankReconciliationView';
+import Budgets from './pages/accounting/Budgets';
+import BudgetEdit from './pages/accounting/BudgetEdit';
+import BudgetVsActual from './pages/reports/BudgetVsActual';
+import Profitability from './pages/reports/Profitability';
+import ArAgingDetails from './pages/reports/ArAgingDetails';
+import ApAgingDetails from './pages/reports/ApAgingDetails';
+import ApAging from './pages/reports/ApAging';
+import StatementOfAccount from './pages/StatementOfAccount';
+import DeliverySummary from './pages/reports/DeliverySummary';
+import CommissionSalesOrders from './pages/reports/CommissionSalesOrders';
+import CommissionInvoices from './pages/reports/CommissionInvoices';
+import InvoicedJobOrders from './pages/reports/InvoicedJobOrders';
+import DisbursementReport from './pages/reports/DisbursementReport';
+import ParkedBankItems from './pages/reports/ParkedBankItems';
+import BirSalesReport from './pages/reports/BirSalesReport';
+import BirPurchaseReport from './pages/reports/BirPurchaseReport';
+import BirEwtReport from './pages/reports/BirEwtReport';
+import BirCwtReport from './pages/reports/BirCwtReport';
+import BirSupplier2307 from './pages/reports/BirSupplier2307';
+import Bir2307Print from './pages/reports/Bir2307Print';
+import BirVatReport from './pages/reports/BirVatReport';
+import BirItrReport from './pages/reports/BirItrReport';
+import BirTaxReturn from './pages/reports/BirTaxReturn';
+import CollectionForecast from './pages/treasury/CollectionForecast';
+import CollectionAgingReport from './pages/treasury/CollectionAgingReport';
+import CollectionIncentive from './pages/treasury/CollectionIncentive';
 
 function App() {
   return (
@@ -201,6 +230,8 @@ function App() {
       <Route path="/payroll/:id/payslips/print" element={<ProtectedRoute><PayslipPrint /></ProtectedRoute>} />
       <Route path="/payroll/:id/print" element={<ProtectedRoute><PayrollRegisterPrint /></ProtectedRoute>} />
       <Route path="/kiosk-devices/badges/print" element={<ProtectedRoute><QrBadgesPrint /></ProtectedRoute>} />
+      {/* The BIR 2307 certificate, printed without the app chrome. */}
+      <Route path="/reports/bir-2307/form" element={<ProtectedRoute><Bir2307Print /></ProtectedRoute>} />
       <Route path="/sales-invoices/:id/print" element={<ProtectedRoute><SalesInvoicePrint /></ProtectedRoute>} />
       <Route path="/delivery-tickets/:id/print" element={<ProtectedRoute><DeliveryTicketPrint /></ProtectedRoute>} />
       <Route path="/purchase-orders/:id/print" element={<ProtectedRoute><PurchaseOrderPrint /></ProtectedRoute>} />
@@ -350,6 +381,33 @@ function App() {
         <Route path="/fund-transfers/new" element={<FundTransferForm />} />
         <Route path="/fund-transfers/:id" element={<FundTransferView />} />
         <Route path="/manage-accounting-period" element={<ManageAccountingPeriod />} />
+        <Route path="/accounting/bank-reconciliation" element={<BankReconciliations />} />
+        <Route path="/accounting/bank-reconciliation/:id" element={<BankReconciliationView />} />
+        <Route path="/budgets" element={<Budgets />} />
+        <Route path="/budgets/:id" element={<BudgetEdit />} />
+        <Route path="/reports/budget-vs-actual" element={<BudgetVsActual />} />
+        <Route path="/reports/profitability" element={<Profitability />} />
+        <Route path="/reports/ar-aging-details" element={<ArAgingDetails />} />
+        <Route path="/reports/ap-aging" element={<ApAging />} />
+        <Route path="/reports/ap-aging-details" element={<ApAgingDetails />} />
+        <Route path="/statement-of-accounts" element={<StatementOfAccount />} />
+        <Route path="/reports/delivery-summary" element={<DeliverySummary />} />
+        <Route path="/reports/commission-sales-orders" element={<CommissionSalesOrders />} />
+        <Route path="/reports/commission-invoices" element={<CommissionInvoices />} />
+        <Route path="/reports/invoiced-job-orders" element={<InvoicedJobOrders />} />
+        <Route path="/reports/disbursement" element={<DisbursementReport />} />
+        <Route path="/reports/parked-bank-items" element={<ParkedBankItems />} />
+        <Route path="/reports/bir-sales" element={<BirSalesReport />} />
+        <Route path="/reports/bir-purchase" element={<BirPurchaseReport />} />
+        <Route path="/reports/bir-ewt" element={<BirEwtReport />} />
+        <Route path="/reports/bir-cwt" element={<BirCwtReport />} />
+        <Route path="/reports/bir-2307" element={<BirSupplier2307 />} />
+        <Route path="/reports/bir-vat" element={<BirVatReport />} />
+        <Route path="/reports/bir-itr" element={<BirItrReport />} />
+        <Route path="/reports/bir-tax-return" element={<BirTaxReturn />} />
+        <Route path="/treasury/collection-forecast" element={<CollectionForecast />} />
+        <Route path="/treasury/collection-aging" element={<CollectionAgingReport />} />
+        <Route path="/treasury/collection-incentive" element={<CollectionIncentive />} />
         <Route path="/commission-payables" element={<CommissionPayables />} />
         <Route path="/commission-payables/new" element={<CommissionPayableEdit />} />
         <Route path="/commission-payables/:id" element={<CommissionPayableView />} />

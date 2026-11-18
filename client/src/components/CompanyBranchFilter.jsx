@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import api from '../api/client';
-import { COMPANY } from '../config/company';
 
 // Company / Branch picker for the group's books. One set of books covers every company; a report
 // can be run for the whole group (COMPANY.name, e.g. Wu Ventures -- the consolidated view), for one
@@ -33,7 +32,7 @@ export default function CompanyBranchFilter({ value, onChange, showBranch = true
       <div className="field" style={{ minWidth: 180 }}>
         <label>Company</label>
         <select value={companyId} onChange={(e) => onChange({ companyId: e.target.value, locationId: '' })}>
-          <option value="">{COMPANY.name} (all companies)</option>
+          <option value="">All companies</option>
           {data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
       </div>

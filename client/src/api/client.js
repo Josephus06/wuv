@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { Capacitor } from '@capacitor/core';
 import { NATIVE_API_BASE } from '../config/company';
+import { getBirCompanyId } from '../utils/birCompany';
 
 // A Capacitor app has no same-origin server to be relative to -- it loads the bundled
 // dist/ files from a local scheme (https://localhost on Android), so a relative '/api'
@@ -14,6 +15,11 @@ const api = axios.create({ baseURL });
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  // BIR Reports work on one company's books at a time (utils/birCompany.js, BirCompanyPicker).
+  const birCompanyId = getBirCompanyId();
+  if (birCompanyId && /^\/?reports\/bir/.test(config.url || '') && !config.params?.companyId) {
+    config.params = { ...(config.params || {}), companyId: birCompanyId };
+  }
   return config;
 });
 

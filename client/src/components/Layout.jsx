@@ -199,6 +199,8 @@ const NAV_STRUCTURE = [
         title: 'Manage Accounting',
         items: [
           { route: '/manage-accounting-period', label: 'Manage Accounting Period' },
+          { route: '/accounting/bank-reconciliation', label: 'Bank Reconciliation' },
+          { route: '/budgets', label: 'Budgets' },
         ],
       },
       {
@@ -206,11 +208,49 @@ const NAV_STRUCTURE = [
         items: [
           { route: '/reports/trial-balance', label: 'Trial Balance' },
           { route: '/reports/income-statement', label: 'Income Statement' },
+          { route: '/reports/budget-vs-actual', label: 'Budget vs Actual' },
           { route: '/reports/balance-sheet', label: 'Balance Sheet' },
           { route: '/reports/ar-aging', label: 'AR Aging' },
+          { route: '/reports/ar-aging-details', label: 'AR Aging Details' },
+          { route: '/reports/ap-aging', label: 'AP Aging' },
+          { route: '/reports/ap-aging-details', label: 'AP Aging Details' },
+          { route: '/statement-of-accounts', label: 'Statement of Account' },
           { route: '/reports/general-ledger', label: 'General Ledger' },
+          { route: '/reports/profitability', label: 'Profitability Report' },
+          { route: '/reports/delivery-summary', label: 'Delivery Summary' },
+          { route: '/reports/commission-sales-orders', label: 'Sales Orders (Commission)' },
+          { route: '/reports/commission-invoices', label: 'Invoices (Commission)' },
+          { route: '/reports/invoiced-job-orders', label: 'Invoiced Job Orders' },
+          { route: '/reports/disbursement', label: 'Disbursement Report' },
+          { route: '/reports/parked-bank-items', label: 'Unidentified Bank Items' },
         ],
       },
+    ],
+  },
+  {
+    // BIR Reports beside Accounting: each prepared for one company's filing at a time (the Filing
+    // company picker on every page, utils/birCompany.js).
+    label: 'BIR Reports',
+    alignRight: true,
+    children: [
+      { route: '/reports/bir-sales', label: 'Sales Report' },
+      { route: '/reports/bir-purchase', label: 'Purchase Report' },
+      { route: '/reports/bir-ewt', label: 'Expanded Withholding Tax' },
+      { route: '/reports/bir-cwt', label: 'Creditable Withholding Tax (2307)' },
+      { route: '/reports/bir-2307', label: 'BIR 2307 to Suppliers' },
+      { route: '/reports/bir-vat', label: 'VAT Computation' },
+      { route: '/reports/bir-itr', label: 'Income Tax Return (1702Q)' },
+      { route: '/reports/bir-tax-return', label: 'Tax Return' },
+    ],
+  },
+  {
+    // Treasury: who chases the money in, as against Accounting, who records it.
+    label: 'Treasury',
+    alignRight: true,
+    children: [
+      { route: '/treasury/collection-forecast', label: 'Collection Forecast' },
+      { route: '/treasury/collection-aging', label: 'Collection Report with Aging' },
+      { route: '/treasury/collection-incentive', label: 'Collection Incentive' },
     ],
   },
 ];

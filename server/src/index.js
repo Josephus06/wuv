@@ -84,6 +84,19 @@ const receivingReportRoutes = require('./routes/receivingReports');
 const repeatWorkRoutes = require('./routes/repeatWork');
 const unitOfMeasuresRoutes = require('./routes/unitOfMeasures');
 const documentAttachmentRoutes = require('./routes/documentAttachments');
+// Accounting reports, BIR Reports and Treasury from GSUITE (2026-11-18).
+const statementOfAccountRoutes = require('./routes/statementOfAccounts');
+const bankReconciliationRoutes = require('./routes/bankReconciliation');
+const budgetRoutes = require('./routes/budgets');
+const deliverySummaryReportRoutes = require('./routes/deliverySummaryReport');
+const commissionReportRoutes = require('./routes/commissionReports');
+const invoicedJobOrderRoutes = require('./routes/invoicedJobOrders');
+const disbursementReportRoutes = require('./routes/disbursementReport');
+const birReportRoutes = require('./routes/birReports');
+const birTaxReturnRoutes = require('./routes/birTaxReturn');
+const collectionForecastRoutes = require('./routes/collectionForecast');
+const collectionAgingReportRoutes = require('./routes/collectionAgingReport');
+const collectionIncentiveRoutes = require('./routes/collectionIncentive');
 const { ensureAssignedAtColumn } = require('./db/ensureSchema');
 const { ensureDatabaseReady } = require('./db/autoBootstrap');
 const { sendTicketReminders } = require('./scripts/ticket_reminder');
@@ -184,6 +197,20 @@ app.use('/api/repeat-work', repeatWorkRoutes);
 app.use('/api/unit-of-measures', unitOfMeasuresRoutes);
 // BIR 2307 copies and other files on a Customer Payment / Sales Invoice.
 app.use('/api/document-attachments', documentAttachmentRoutes);
+// Accounting > Manage Accounting / Reports, BIR Reports and Treasury. The /api/reports/<x> routers
+// sit behind the general /api/reports router, which answers only its own paths.
+app.use('/api/statement-of-accounts', statementOfAccountRoutes);
+app.use('/api/bank-reconciliation', bankReconciliationRoutes);
+app.use('/api/budgets', budgetRoutes);
+app.use('/api/reports/delivery-summary', deliverySummaryReportRoutes);
+app.use('/api/reports/commission', commissionReportRoutes);
+app.use('/api/reports/invoiced-job-orders', invoicedJobOrderRoutes);
+app.use('/api/reports/disbursement', disbursementReportRoutes);
+app.use('/api/reports/bir', birReportRoutes);
+app.use('/api/reports/bir-tax-return', birTaxReturnRoutes);
+app.use('/api/collection-forecast', collectionForecastRoutes);
+app.use('/api/reports/collection-aging', collectionAgingReportRoutes);
+app.use('/api/treasury/collection-incentive', collectionIncentiveRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
