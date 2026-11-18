@@ -52,7 +52,7 @@ const TEXT = {
   new_employee_no: 30, bank_account_no: 40, nickname: 60, middle_initial: 10, address: 255, birth_place: 150,
   sex: 10, nationality: 60, religion: 60, civil_status: 20, height: 20, weight: 20, blood_type: 5,
   educational_attainment: 60, course: 255, sss_no: 20, tin: 20, hdmf_no: 20, philhealth_no: 20,
-  employment_status: 30, position_code: 30, biometric_user_id: 40,
+  employment_status: 30, position_code: 30, biometric_user_id: 40, rest_day_group: 60, shift_group: 60,
   prof_license_no: 60, labor_type: 30, uniform_size: 10, shoe_size: 10, tax_status: 20, employment_type: 30,
   emergency_contact_name: 150, emergency_contact_address: 255, emergency_contact_phone: 50,
   emergency_contact_relationship: 60, spouse_name: 150, spouse_occupation: 100, bank_group: 60,
@@ -138,9 +138,9 @@ async function currentPay(employeeId) {
   }
 }
 
-// Suggestions for the profile's company-specific lists (Bank Group, Classification, ...): what is
+// Suggestions for the profile's company-specific lists (Rest Day Group, Bank Group, ...): what is
 // already in use, so the same group is spelled the same way every time.
-const OPTION_COLUMNS = ['religion', 'nationality', 'employment_status', 'position_code',
+const OPTION_COLUMNS = ['religion', 'nationality', 'employment_status', 'position_code', 'rest_day_group', 'shift_group',
   'labor_type', 'employment_type', 'bank_group', 'compensation_group', 'classification', 'employee_level',
   'educational_attainment', 'uniform_size', 'shoe_size'];
 router.get('/meta/profile-options', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
@@ -152,6 +152,11 @@ router.get('/meta/profile-options', requireAuth, requirePermission(ROUTE, 'can_v
         .catch((e) => { if (e.code === 'ER_BAD_FIELD_ERROR') return [[]]; throw e; });
       out[c] = rows.map((r) => r.v);
     }
+    // Position Description is what links an employee to their Performance Evaluation template
+    // (2026-10-23): offer the templates' positions first, so it is picked rather than retyped.
+    const [tpl] = await pool.query('SELECT position_title AS v FROM perf_templates WHERE is_active = 1 ORDER BY position_title')
+      .catch(() => [[]]);
+    out.position_title = [...new Set([...tpl.map((r) => r.v), ...(out.position_title || [])])];
     res.json(out);
   } catch (err) { next(err); }
 });
@@ -223,6 +228,7 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
       [...cols.map((c) => values[c]), req.params.id]
     );
     const [[row]] = await pool.query(`SELECT ${DIRECTORY_COLUMNS.join(', ')} FROM employees WHERE id = ?`, [req.params.id]);
+    if (!row) return res.status(404).json({ error: 'Not found' });
     res.json(row);
   } catch (err) {
     if (err.code === 'ER_BAD_FIELD_ERROR') return res.status(503).json({ error: 'Run db/add-employee-profile.js first.' });

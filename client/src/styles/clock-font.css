@@ -1,0 +1,84 @@
+/* =============================================================================
+   The assigned Job Order clock — Knockout HTF49-Liteweight
+   =============================================================================
+
+   KNOCKOUT IS A LICENSED TYPEFACE from Hoefler&Co (typography.com). It is not on
+   Google Fonts and cannot be fetched from a CDN, so the webfont files have to be
+   bought and dropped in by hand:
+
+       client/public/fonts/knockout-htf49-liteweight.woff2
+       client/public/fonts/knockout-htf49-liteweight.woff
+
+   H&Co issue webfonts through their own Cloud.typography service, which serves a
+   stylesheet from a project-specific URL rather than files you host. If that is
+   the route taken, delete the @font-face below, drop the <link> they give you into
+   client/index.html, and leave everything else here alone -- the family name in
+   --font-clock is what does the work either way.
+
+   UNTIL THE FILES EXIST, the stack below falls through to the app's own display
+   face and the clock simply looks as it does today. Nothing breaks, nothing 404s
+   loudly, and the change is invisible rather than wrong.
+
+   ON THE NAME. The cut is "Liteweight", not "Lightweight" -- Knockout's widths run
+   HTF29-JuniorLiteweight, HTF49-Liteweight, HTF69-FullLiteweight, and H&Co spell it
+   without the 'gh'. Confirmed against the supplied file's own OpenType name table,
+   which reads family 'Knockout', subfamily 'HTF49-Liteweight'. */
+
+@font-face {
+  font-family: 'Knockout HTF49-Liteweight';
+  /* Every format listed, so whichever file you actually hold works without converting
+     it. The browser takes the first it can read and ignores the rest -- a missing URL in
+     this list costs one failed request, not a broken face. woff2 is worth producing if
+     you only have the desktop OTF: it is ~40% of the size over the wire. */
+  src: url('/fonts/knockout-htf49-liteweight.woff2') format('woff2'),
+       url('/fonts/knockout-htf49-liteweight.woff') format('woff'),
+       url('/fonts/knockout-htf49-liteweight.otf') format('opentype'),
+       url('/fonts/knockout-htf49-liteweight.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  /* swap, not block: this is a COUNTDOWN. An artist watching their remaining time
+     must never see an empty box while a font downloads -- the fallback ticks from
+     the first frame and Knockout takes over when it arrives. */
+  font-display: swap;
+}
+
+:root {
+  /* Named here rather than written into the rules, so the clock face can be changed
+     in one place if the licence or the choice changes. */
+  /* The first name is the one @font-face above defines, so it is what actually loads.
+     The two after it are the names the FILE declares internally -- read out of its
+     OpenType name table: family 'Knockout', full name 'Knockout-HTF49-Liteweight' --
+     which is what a machine with the desktop font installed will match on. Then the
+     app's display face, then the system. */
+  --font-clock: 'Knockout HTF49-Liteweight', 'Knockout-HTF49-Liteweight', 'Knockout',
+    'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+}
+
+/* The two places the assigned JO's time appears, and they must match: the floating
+   timer that follows the artist around the app, and the big countdown on the run
+   screen. A clock that changed face between the two would read as two clocks.
+
+   THE GLASS SELECTORS ARE NOT REDUNDANT. glass.css styles .hi-lg -- which the run
+   screen's countdown also carries -- under a theme-scoped selector, and that
+   out-specifies a bare class (0,3,0 against 0,1,0). Without the theme-scoped copies
+   below, the clock would take Knockout in day and night mode and silently fall back
+   to Space Grotesk in glass, which is the theme it is actually being looked at in. */
+.running-timer-clock,
+.assigned-jo-clock,
+:root[data-theme='glass'] .running-timer-clock,
+:root[data-theme='glass'] .assigned-jo-clock,
+:root[data-theme='dark'] .running-timer-clock,
+:root[data-theme='dark'] .assigned-jo-clock {
+  font-family: var(--font-clock);
+  /* 400, NOT bold. .running-timer-clock asks for 700 and this cut ships one weight, so
+     the browser would synthesise the bold -- smearing the letterforms sideways and
+     undoing the point of choosing a Liteweight in the first place. Knockout is already
+     a strong condensed face at its natural weight. */
+  font-weight: 400;
+  /* Knockout is a condensed grotesque with no true tabular set, so the digits are
+     already even-width -- but this costs nothing and keeps the fallback steady, which
+     is what stops a ticking countdown jittering as the numbers change. */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  letter-spacing: 0.01em;
+}

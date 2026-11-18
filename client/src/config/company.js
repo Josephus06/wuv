@@ -27,6 +27,10 @@ export const COMPANY = {
   phone: env.VITE_COMPANY_PHONE || '',
   website: env.VITE_COMPANY_WEBSITE || '',
 
+  // The courts named in the Delivery Ticket's terms, e.g. "the City of Cebu". Blank leaves that
+  // sentence off the print-out.
+  jurisdiction: env.VITE_COMPANY_JURISDICTION || '',
+
   // Shown on the Estimate print-out's payment instructions. One bank account per line.
   bankAccounts: (env.VITE_COMPANY_BANKS || '')
     .split('|')

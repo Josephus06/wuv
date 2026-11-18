@@ -12,7 +12,11 @@
 //
 // Matched case-insensitively on purpose: live data carries 'INVENTORY', 'JIT', 'Service'
 // and '' in this column, so casing is clearly not something the source system normalizes.
-const NON_STOCK_ITEM_TYPES = new Set(['service', 'non-inventory', 'noninventory']);
+//
+// Landed Cost (freight, cutting charges -- the lines of a PO2) and Discount are charges too, as
+// lib/stockMovements.js already treats them (2026-10-12: receiving a Landed Cost PO must not put
+// "FREIGHT/SHIPPING CHARGES" on a shelf).
+const NON_STOCK_ITEM_TYPES = new Set(['service', 'non-inventory', 'noninventory', 'landed cost', 'landedcost', 'discount']);
 
 function isNonStockItem(itemType) {
   return NON_STOCK_ITEM_TYPES.has(String(itemType || '').trim().toLowerCase());

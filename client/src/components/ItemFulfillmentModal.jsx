@@ -3,11 +3,13 @@ import api from '../api/client';
 import LoadingSpinner from './LoadingSpinner';
 import { isNonStockItem } from '../utils/itemTypes';
 
+import { displayDate } from '../utils/dates';
+
 function qty(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : '';
 }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
 
 // Mirrors the real "Item Fulfillment" popup reached from a Transfer Order's Fulfill
 // button -- a transaction of its own, distinct from the TO. Saving it only pulls stock
@@ -93,10 +95,17 @@ export default function ItemFulfillmentModal({ to, lines, onClose, onSaved }) {
                   // whatever's left on the line. See utils/itemTypes.js; the same rule
                   // gates the server side in routes/transferOrders.js.
                   const nonStock = isNonStockItem(l.item_type);
-                  const committedRemaining = Number(l.committed || 0) - Number(l.fulfilled || 0);
+                  // `committed` is the quantity still reserved and unshipped -- it comes down as
+                  // each fulfilment goes out -- so it is the cap as it stands. Subtracting
+                  // `fulfilled` from it again double-counted a reservation made after a partial
+                  // shipment, which is already net of it. Mirrors routes/transferOrders.js.
+                  const committedRemaining = Number(l.committed || 0);
                   const remaining = Number(l.adjusted_qty ?? l.qty) - Number(l.fulfilled || 0);
-                  const cap = nonStock ? remaining : committedRemaining;
-                  const blocked = !nonStock && committedRemaining <= 0;
+                  // Never more than the order has left to give, whatever the reservation says --
+                  // the same belt-and-braces the server applies, and what keeps a legacy line
+                  // whose committed was never decremented from being over-fulfilled.
+                  const cap = nonStock ? remaining : Math.min(committedRemaining, remaining);
+                  const blocked = !nonStock && cap <= 0;
                   return (
                     <tr key={l.id}>
                       <td style={{ color: '#db2777', fontWeight: 600 }}>{idx + 1}</td>

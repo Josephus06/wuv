@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import DataTable from '../components/DataTable';
 import EntityPicker from '../components/EntityPicker';
@@ -25,6 +25,13 @@ function accountLabel(a) { return a ? `${a.account_code} — ${a.account_name}` 
 function jobTypeLabel(j) { return j ? j.display_name : ''; }
 function departmentLabel(d) { return d ? d.name : ''; }
 function processLabel(p) { return p ? `${p.process_code} — ${p.process_name}` : ''; }
+// Trailing zeros off a DECIMAL(10,4) read as false precision on a screen where 0.12 and 1.63
+// are typical -- "1.6300 minutes" invites someone to think four places were measured.
+function minutes(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? String(Number(n.toFixed(4))) : null;
+}
 function customerLabel(c) { return c ? `${c.customer_code} — ${c.name}` : ''; }
 
 export default function JobTypeEdit() {
@@ -46,6 +53,12 @@ export default function JobTypeEdit() {
   const [processes, setProcesses] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [newCustomerGpRate, setNewCustomerGpRate] = useState(0);
+  const [editingTimeId, setEditingTimeId] = useState(null);
+  const [timeDraft, setTimeDraft] = useState('');
+  const [timeError, setTimeError] = useState('');
+  const [materials, setMaterials] = useState([]);
+  const [inventoryItems, setInventoryItems] = useState([]);
+  const [materialError, setMaterialError] = useState('');
 
   function load() {
     return Promise.all([
@@ -55,7 +68,11 @@ export default function JobTypeEdit() {
       api.get('/lookups/processes'),
       api.get('/customers'),
       isNew ? Promise.resolve(null) : api.get(`/job-types/${id}`),
-    ]).then(([deptRes, acctRes, jtRes, procRes, custRes, detailRes]) => {
+      api.get('/inventory'),
+      isNew ? Promise.resolve({ data: [] }) : api.get(`/job-types/${id}/materials`),
+    ]).then(([deptRes, acctRes, jtRes, procRes, custRes, detailRes, invRes, matRes]) => {
+      setInventoryItems(invRes.data);
+      setMaterials(matRes.data);
       setDepartments(deptRes.data);
       setAccounts(acctRes.data);
       setJobTypes(jtRes.data.filter((j) => !id || j.id !== Number(id)));
@@ -126,6 +143,50 @@ export default function JobTypeEdit() {
     setProcesses((prev) => prev.filter((p) => p.id !== linkId));
   }
 
+  async function addMaterial(processLinkId, item) {
+    setMaterialError('');
+    try {
+      const { data } = await api.post(`/job-types/${id}/processes/${processLinkId}/materials`, { inventory_id: item.id });
+      setMaterials((prev) => [...prev, data]);
+    } catch (err) {
+      setMaterialError(err.response?.data?.error || 'Could not add that material.');
+    }
+  }
+
+  async function removeMaterial(processLinkId, materialId) {
+    setMaterialError('');
+    try {
+      await api.delete(`/job-types/${id}/processes/${processLinkId}/materials/${materialId}`);
+      setMaterials((prev) => prev.filter((m) => m.id !== materialId));
+    } catch (err) {
+      setMaterialError(err.response?.data?.error || 'Could not remove that material.');
+    }
+  }
+
+  function startEditTime(row) {
+    setTimeError('');
+    setEditingTimeId(row.id);
+    // Seeded with the override only. Showing the inherited value here would silently turn
+    // an inherited row into an overridden one the moment someone opened and saved it.
+    setTimeDraft(row.minutes_per_unit === null || row.minutes_per_unit === undefined ? '' : String(row.minutes_per_unit));
+  }
+
+  async function saveTime(linkId) {
+    setTimeError('');
+    const raw = timeDraft.trim();
+    if (raw !== '' && (!Number.isFinite(Number(raw)) || Number(raw) < 0)) {
+      setTimeError('Time study must be a number of minutes, 0 or greater.');
+      return;
+    }
+    try {
+      const { data } = await api.patch(`/job-types/${id}/processes/${linkId}`, { minutes_per_unit: raw === '' ? null : Number(raw) });
+      setProcesses((prev) => prev.map((p) => (p.id === linkId ? data : p)));
+      setEditingTimeId(null);
+    } catch (err) {
+      setTimeError(err.response?.data?.error || 'Could not save that time study.');
+    }
+  }
+
   async function addCustomer(c) {
     if (customers.some((row) => row.customer_id === c.id)) return;
     const { data } = await api.post(`/job-types/${id}/customers`, { customer_id: c.id, gp_rate: newCustomerGpRate || 0 });
@@ -145,7 +206,7 @@ export default function JobTypeEdit() {
       <div className="page-header">
         <h1>{isNew ? 'Add / Update Job' : `Job — ${form.display_name}`}</h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn" onClick={() => navigate('/job-types')}>Back</button>
+          <Link className="btn" to={'/job-types'}>Back</Link>
           {!isNew && <button className="btn btn-danger" onClick={handleDelete}>Delete Job</button>}
           <button className="btn btn-primary" disabled={saving} onClick={handleSave}>{saving ? <LoadingSpinner inline size="sm" label="Saving..." /> : 'Save'}</button>
         </div>
@@ -220,6 +281,7 @@ export default function JobTypeEdit() {
 
       <div className="status-tabs" style={{ marginTop: 20 }}>
         <button className={`status-tab ${tab === 'processes' ? 'active' : ''}`} onClick={() => setTab('processes')}>Processes {processes.length}</button>
+        <button className={`status-tab ${tab === 'materials' ? 'active' : ''}`} onClick={() => setTab('materials')}>Materials {materials.length}</button>
         <button className={`status-tab ${tab === 'accounting' ? 'active' : ''}`} onClick={() => setTab('accounting')}>Accounting</button>
         <button className={`status-tab ${tab === 'customers' ? 'active' : ''}`} onClick={() => setTab('customers')}>Customers</button>
       </div>
@@ -228,20 +290,60 @@ export default function JobTypeEdit() {
         <div className="card">
           {isNew ? <p className="muted" style={{ marginTop: 0 }}>Save this job first to manage its processes.</p> : (
             <>
+              {timeError && <div className="error-banner" style={{ marginBottom: 10 }}>{timeError}</div>}
               <DataTable
                 columns={[
                   { key: 'process_code', label: 'Process Code' },
                   { key: 'process_name', label: 'Process Name' },
+                  {
+                    key: 'effective_minutes_per_unit',
+                    label: 'Time Study (min)',
+                    render: (r) => (editingTimeId === r.id ? (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <input
+                          type="number" min="0" step="0.0001" autoFocus
+                          style={{ width: 110 }}
+                          value={timeDraft}
+                          placeholder={minutes(r.process_minutes_per_unit) ?? 'not set'}
+                          onChange={(e) => setTimeDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveTime(r.id);
+                            if (e.key === 'Escape') setEditingTimeId(null);
+                          }}
+                        />
+                        <button type="button" className="btn btn-sm btn-primary" onClick={() => saveTime(r.id)}>Save</button>
+                        <button type="button" className="btn btn-sm" onClick={() => setEditingTimeId(null)}>Cancel</button>
+                      </div>
+                    ) : (
+                      <button type="button" className="link-btn" onClick={() => startEditTime(r)}>
+                        {minutes(r.effective_minutes_per_unit) ?? <span className="muted">Set time</span>}
+                      </button>
+                    )),
+                  },
+                  {
+                    key: 'source',
+                    label: 'Source',
+                    // Which number is in play matters: an inherited row moves when the process's
+                    // own study is re-measured, an overridden one does not.
+                    render: (r) => (r.minutes_per_unit === null || r.minutes_per_unit === undefined
+                      ? <span className="muted">Process default{minutes(r.process_minutes_per_unit) === null ? ' (none set)' : ''}</span>
+                      : 'This job type'),
+                  },
                 ]}
                 rows={processes}
                 actions={(r) => <button className="btn btn-sm btn-danger" onClick={() => removeProcess(r.id)}>Remove</button>}
                 emptyLabel="No processes assigned yet."
               />
+              <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>
+                Total time study: <strong>{minutes(processes.reduce((sum, r) => sum + Number(r.effective_minutes_per_unit || 0), 0)) ?? '0'}</strong> minutes per unit.
+                Clear a value to fall back to the process's own study.
+              </p>
               <div className="inline-form" style={{ marginTop: 10 }}>
                 <div className="field">
                   <label>Process</label>
                   <EntityPicker
                     label="Process" items={processesList} value="" getLabel={processLabel}
+                    isSelectable={(p) => !!p.is_active}
                     columns={[{ key: 'process_code', label: 'Code' }, { key: 'process_name', label: 'Name' }]}
                     searchKeys={['process_code', 'process_name']}
                     onSelect={addProcess}
@@ -249,6 +351,57 @@ export default function JobTypeEdit() {
                   />
                 </div>
               </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === 'materials' && (
+        <div className="card">
+          {isNew ? <p className="muted" style={{ marginTop: 0 }}>Save this job first to define its materials.</p> : (
+            <>
+              <p className="muted" style={{ marginTop: 0 }}>
+                The stock each process may draw on when this job type is estimated. A process with
+                nothing listed is unrestricted -- the estimate offers the full inventory for it.
+              </p>
+              {materialError && <div className="error-banner" style={{ marginBottom: 10 }}>{materialError}</div>}
+              {processes.length === 0 && <div className="empty-state">Assign a process first, on the Processes tab.</div>}
+              {processes.map((proc) => {
+                const rows = materials.filter((m) => m.job_type_process_id === proc.id);
+                return (
+                  <div key={proc.id} className="card" style={{ marginBottom: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+                      <strong>{proc.process_name}</strong>
+                      <span className="muted">{proc.process_code} &middot; {rows.length ? `${rows.length} material${rows.length === 1 ? '' : 's'}` : 'unrestricted'}</span>
+                    </div>
+                    <DataTable
+                      columns={[
+                        { key: 'item_code', label: 'Code' },
+                        { key: 'display_name', label: 'Material' },
+                      ]}
+                      rows={rows}
+                      actions={(m) => <button className="btn btn-sm btn-danger" onClick={() => removeMaterial(proc.id, m.id)}>Remove</button>}
+                      emptyLabel="No materials defined -- any item may be chosen."
+                    />
+                    <div className="inline-form" style={{ marginTop: 10 }}>
+                      <div className="field">
+                        <label>Material</label>
+                        <EntityPicker
+                          label="Material" items={inventoryItems} value="" getLabel={(i) => i.display_name}
+                          columns={[
+                            { key: 'item_code', label: 'Code' },
+                            { key: 'display_name', label: 'Name' },
+                            { key: 'category_name', label: 'Category' },
+                          ]}
+                          searchKeys={['item_code', 'display_name']}
+                          onSelect={(i) => addMaterial(proc.id, i)}
+                          placeholder="Add Material..."
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </>
           )}
         </div>

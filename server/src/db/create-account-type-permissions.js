@@ -19,12 +19,15 @@ require('dotenv').config();
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const RESEED = process.argv.includes('--reseed');
-const ACTIONS = ['can_view', 'can_add', 'can_edit', 'can_delete', 'can_approve'];
+const ACTIONS = ['can_view', 'can_add', 'can_edit', 'can_delete', 'can_approve', 'can_print'];
 
-// Kept in step with ACCOUNT_TYPE_OPTIONS in client/src/pages/UserWizard.jsx.
+// Kept in step with ACCOUNT_TYPE_OPTIONS in client/src/utils/accountTypes.js.
 const ACCOUNT_TYPES = [
-  'Sales', 'Production', 'Costing', 'Logistics', 'Accounts Receivable',
-  'Account Manager', 'Artist', 'General Manager', 'System Admin',
+  'Sales', 'Production', 'Costing Supervisor', 'Logistics', 'Purchasing', 'Inventory',
+  'Accounts Receivable', 'Accounting', 'Treasury', 'HR', 'IT', 'Security',
+  'Accounting Manager', 'Artist', 'General Manager', 'System Admin', 'Audit Staff', 'Audit Supervisor',
+  'Production Manager', 'Sales Manager', 'SBU', 'Design Supervisor', 'HR Manager', 'Accounting Supervisor',
+  'Costing Staff', 'Account Payable', 'CSA', 'Branch Supervisor',
 ];
 
 const DDL = `
@@ -37,6 +40,7 @@ CREATE TABLE account_type_permissions (
     can_edit TINYINT NOT NULL DEFAULT 0,
     can_delete TINYINT NOT NULL DEFAULT 0,
     can_approve TINYINT NOT NULL DEFAULT 0,
+    can_print TINYINT NOT NULL DEFAULT 0,
     updated_at DATETIME NULL,
     updated_by_user_id BIGINT NULL,
     UNIQUE KEY uq_atp (account_type, page_id),
@@ -88,7 +92,7 @@ async function main() {
     // of their existing users. A type with no users yet seeds empty for an admin to fill in.
     const rows = [];
     if (type === 'System Admin') {
-      pages.forEach((pg) => rows.push({ page_id: pg.id, can_view: 1, can_add: 1, can_edit: 1, can_delete: 1, can_approve: 1 }));
+      pages.forEach((pg) => rows.push({ page_id: pg.id, can_view: 1, can_add: 1, can_edit: 1, can_delete: 1, can_approve: 1, can_print: 1 }));
     } else {
       const ids = usersByType.get(type) || [];
       if (ids.length) {
@@ -108,7 +112,7 @@ async function main() {
         for (const [k, count] of tally) {
           if (count <= threshold) continue;
           const [pid, a] = k.split('|');
-          if (!byPage.has(pid)) byPage.set(pid, { page_id: Number(pid), can_view: 0, can_add: 0, can_edit: 0, can_delete: 0, can_approve: 0 });
+          if (!byPage.has(pid)) byPage.set(pid, { page_id: Number(pid), can_view: 0, can_add: 0, can_edit: 0, can_delete: 0, can_approve: 0, can_print: 0 });
           byPage.get(pid)[a] = 1;
         }
         rows.push(...byPage.values());
@@ -124,9 +128,9 @@ async function main() {
     if (already) await pool.query('DELETE FROM account_type_permissions WHERE account_type = ?', [type]);
     for (const r of rows) {
       await pool.query(
-        `INSERT INTO account_type_permissions (account_type, page_id, can_view, can_add, can_edit, can_delete, can_approve, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
-        [type, r.page_id, r.can_view, r.can_add, r.can_edit, r.can_delete, r.can_approve]
+        `INSERT INTO account_type_permissions (account_type, page_id, can_view, can_add, can_edit, can_delete, can_approve, can_print, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [type, r.page_id, r.can_view, r.can_add, r.can_edit, r.can_delete, r.can_approve, r.can_print]
       );
     }
     console.log(`\n${type}: seeded ${rows.length} page(s) / ${grants} grant(s) (${from}).`);

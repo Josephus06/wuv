@@ -4,6 +4,9 @@ import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate } from '../utils/dates';
+import useAutoSearch from '../utils/useAutoSearch';
+import SearchInput from '../components/SearchInput';
 
 const PAGE_SIZE = 10;
 
@@ -20,7 +23,7 @@ function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? String(v).slice(0, 10) : ''; }
+function formatDate(v) { return v ? displayDate(String(v).slice(0, 10)) : ''; }
 
 export default function InventoryAdjustments() {
   const { can } = useAuth();
@@ -52,19 +55,20 @@ export default function InventoryAdjustments() {
     setPage(1);
     load();
   }
+  useAutoSearch(search, runSearch);
 
   return (
     <div>
       <div className="page-header">
         <h1>Saved Inventory Adjustments</h1>
-        {can('/inventory-adjustments', 'can_add') && <button className="btn btn-primary" onClick={() => navigate('/inventory-adjustments/new')}>Add New</button>}
+        {can('/inventory-adjustments', 'can_add') && <Link className="btn btn-primary" to={'/inventory-adjustments/new'}>Add New</Link>}
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Record No. or memo..." />
+            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Record No. or memo..." />
           </div>
         </div>
         <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={runSearch}>Search</button>

@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
+import { usePeriodLocked } from '../utils/periodLock';
 import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate,  displayMonth, displayAuditTime } from '../utils/dates';
 
 function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00';
 }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
-function formatMonth(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
+function formatMonth(v) { return v ? displayMonth(v) : '—'; }
 
 const STATUS_LABELS = { posted: 'POSTED', void: 'VOID' };
 
@@ -39,9 +41,13 @@ export default function CommissionVoucherView() {
     finally { setBusy(false); }
   }
 
+  // Closed accounting period: no Edit / Void / Cancel (utils/periodLock.js; the server refuses them too).
+  const periodLocked = usePeriodLocked(cv?.date_created, 'other_gl');
+
   if (loading || !cv) return <LoadingSpinner />;
 
-  const canEdit = can('/commission-vouchers', 'can_edit');
+  const canEdit = (can('/commission-vouchers', 'can_edit') && !periodLocked);
+  const canVoid = (can('/commission-vouchers', 'can_void') && !periodLocked);
   const isOpen = cv.status !== 'void';
   const glDebit = (cv.gl_impact || []).reduce((s, r) => s + Number(r.debit || 0), 0);
   const glCredit = (cv.gl_impact || []).reduce((s, r) => s + Number(r.credit || 0), 0);
@@ -52,12 +58,21 @@ export default function CommissionVoucherView() {
         <div />
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn btn-sm" onClick={() => navigate(-1)}>Back to Lists</button>
-          {canEdit && isOpen && <button className="btn btn-sm btn-primary" onClick={() => navigate(`/commission-vouchers/${id}/edit`)}>Edit</button>}
-          {canEdit && isOpen && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
+          {/* The printed Payment Voucher (2026-10-26); a voided one prints marked VOID. */}
+          {can('/commission-vouchers', 'can_print') && (
+            <button className="btn btn-sm" onClick={() => window.open(`/commission-vouchers/${id}/print`, '_blank')}>Print</button>
+          )}
+          {canEdit && isOpen && <Link className="btn btn-sm btn-primary" to={`/commission-vouchers/${id}/edit`}>Edit</Link>}
+          {canVoid && isOpen && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
         </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+      {periodLocked && (
+        <div className="warning-banner" style={{ marginBottom: 12 }}>
+          The accounting period for this transaction is closed ({periodLocked}), so it can no longer be edited, voided or cancelled.
+        </div>
+      )}
 
       <div className="estimate-banner">
         <div className="estimate-banner-title">
@@ -105,7 +120,7 @@ export default function CommissionVoucherView() {
                 {cv.lines.map((l) => (
                   <tr key={l.id}>
                     <td>{l.commission_payable_id
-                      ? <button type="button" className="link-btn" onClick={() => navigate(`/commission-payables/${l.commission_payable_id}`)}>{l.commission_payable_no}</button>
+                      ? <Link className="link-btn" to={`/commission-payables/${l.commission_payable_id}`}>{l.commission_payable_no}</Link>
                       : (l.commission_payable_no || '—')}</td>
                     <td>{formatDate(l.payable_date)}</td>
                     <td>{formatMonth(l.period_from)}</td>
@@ -126,12 +141,18 @@ export default function CommissionVoucherView() {
         <div className="card">
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Account Code</th><th>Account Title</th><th>Description</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
+              <thead><tr><th>Account Code</th><th>Account Title</th><th>Applies To</th><th>Description</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
               <tbody>
-                {cv.expenses.length === 0 && <tr><td colSpan={4} className="muted" style={{ textAlign: 'center', padding: 20 }}>No expenses.</td></tr>}
+                {cv.expenses.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 20 }}>No expenses.</td></tr>}
                 {cv.expenses.map((e) => (
                   <tr key={e.id}>
-                    <td>{e.account_code}</td><td>{e.account_name}</td><td>{e.description || ''}</td>
+                    <td>{e.account_code}</td><td>{e.account_name}</td>
+                    {/* Set only on a payback -- an expense pointed at a month reduces that
+                        month's Released Commission instead of joining the refund pool. */}
+                    <td>{e.applies_to_period_from
+                      ? displayMonth(e.applies_to_period_from)
+                      : <span className="muted">—</span>}</td>
+                    <td>{e.description || ''}</td>
                     <td style={{ textAlign: 'right' }}>{money(e.amount)}</td>
                   </tr>
                 ))}
@@ -176,7 +197,7 @@ export default function CommissionVoucherView() {
                 {cv.lines.map((l) => (
                   <tr key={l.id}>
                     <td>{l.commission_payable_id
-                      ? <button type="button" className="link-btn" onClick={() => navigate(`/commission-payables/${l.commission_payable_id}`)}>{l.commission_payable_no}</button>
+                      ? <Link className="link-btn" to={`/commission-payables/${l.commission_payable_id}`}>{l.commission_payable_no}</Link>
                       : (l.commission_payable_no || '—')}</td>
                     <td>{formatMonth(l.period_from)}</td>
                     <td style={{ textAlign: 'right' }}>{money(l.released_amount)}</td>
@@ -192,7 +213,7 @@ export default function CommissionVoucherView() {
         <div className="card">
           <DataTable
             columns={[
-              { key: 'set_at', label: 'Date Time', render: (r) => new Date(r.set_at).toLocaleString() },
+              { key: 'set_at', label: 'Date Time', render: (r) => displayAuditTime(r.set_at) },
               { key: 'set_by_name', label: 'Set By' }, { key: 'event_type', label: 'Type' },
               { key: 'field_name', label: 'Field' }, { key: 'old_value', label: 'Old Value' }, { key: 'new_value', label: 'New Value' },
             ]}

@@ -26,16 +26,67 @@ function allocateVoucher(lines, deductTotal, refundTotal) {
   return out;
 }
 
+// An expense pointed at a specific month is a PAYBACK, not a deduction or a refund, and is
+// excluded from both pools here so the waterfalls never see it -- it is applied straight to
+// its own month further down instead.
+const isTargeted = (e) => e.applies_to_payable_id != null;
+
 function splitExpenses(expenseRows) {
   let d = 0; let r = 0;
-  for (const e of expenseRows) { const a = Number(e.amount) || 0; if (a < 0) d += -a; else r += a; }
+  for (const e of expenseRows) {
+    if (isTargeted(e)) continue;
+    const a = Number(e.amount) || 0; if (a < 0) d += -a; else r += a;
+  }
   return { d: round2(d), r: round2(r) };
+}
+
+// Paybacks for one employee/year, summed per month.
+//
+// A payback settles an overpayment: it reduces the month's released WITHOUT the offsetting
+// change to deducted that a refund makes. That distinction is the entire point -- a refund
+// adds to released and takes the same off deducted, so `unpaid = confirmed - (released +
+// deducted)` does not move, and an overpayment can never be cleared with one.
+//
+// Only expenses on Commission Payable (24200) carry a target; every other account keeps the
+// deduction/refund behaviour it has always had. Resolved by account code, the same way
+// glImpact.js finds the account, because the id differs between databases.
+const COMMISSION_PAYABLE_CODE = '24200';
+
+async function paybackByMonthForEmployee(employeeId, year) {
+  const byMonth = new Array(13).fill(0);
+  const [cols] = await pool.query("SHOW COLUMNS FROM commission_voucher_expenses LIKE 'applies_to_payable_id'");
+  if (!cols.length) return byMonth; // migration not run here yet
+
+  const [rows] = await pool.query(
+    `SELECT MONTH(cp.period_from) AS month, cve.amount
+       FROM commission_voucher_expenses cve
+       JOIN commission_vouchers cv ON cv.id = cve.commission_voucher_id
+       JOIN commission_payables cp ON cp.id = cve.applies_to_payable_id
+       JOIN chart_of_accounts coa ON coa.id = cve.account_id
+      WHERE cve.applies_to_payable_id IS NOT NULL
+        AND coa.account_code = ?
+        AND cv.status <> 'void'
+        AND cp.employee_id = ? AND YEAR(cp.period_from) = ?`,
+    [COMMISSION_PAYABLE_CODE, employeeId, year],
+  );
+  for (const r of rows) byMonth[Number(r.month)] = round2(byMonth[Number(r.month)] + (Number(r.amount) || 0));
+  return byMonth;
 }
 
 async function tablesExist() {
   const [t] = await pool.query("SHOW TABLES LIKE 'commission_voucher_lines'");
   return t.length > 0;
 }
+
+// Selected explicitly rather than with * so a database where the migration has not been run
+// still reads: the column simply comes back NULL and every expense stays a deduction/refund.
+async function hasTargetColumn() {
+  const [cols] = await pool.query("SHOW COLUMNS FROM commission_voucher_expenses LIKE 'applies_to_payable_id'");
+  return cols.length > 0;
+}
+const expenseSelect = (targeted) => (targeted
+  ? 'commission_voucher_id AS vid, amount, applies_to_payable_id'
+  : 'commission_voucher_id AS vid, amount, NULL AS applies_to_payable_id');
 
 // Per-month net released / deducted / refunded for one employee's vouchers in a year.
 async function releaseByMonthForEmployee(employeeId, year) {
@@ -55,9 +106,13 @@ async function releaseByMonthForEmployee(employeeId, year) {
   const byV = new Map();
   for (const l of vlines) { const g = byV.get(l.vid) || []; g.push({ month: Number(l.month), gross: Number(l.gross) }); byV.set(l.vid, g); }
   const lineVids = [...byV.keys()];
+  const targeted = await hasTargetColumn();
   const expByV = new Map();
   if (lineVids.length) {
-    const [exps] = await pool.query('SELECT commission_voucher_id AS vid, amount FROM commission_voucher_expenses WHERE commission_voucher_id IN (?)', [lineVids]);
+    const [exps] = await pool.query(
+      `SELECT ${expenseSelect(targeted)} FROM commission_voucher_expenses WHERE commission_voucher_id IN (?)`,
+      [lineVids],
+    );
     for (const e of exps) { const g = expByV.get(e.vid) || []; g.push(e); expByV.set(e.vid, g); }
   }
 
@@ -65,11 +120,16 @@ async function releaseByMonthForEmployee(employeeId, year) {
   // These never surface via the line->payable join above, so pull them separately and attribute
   // them to their own date_created year. Positive amount = refund (pooled below); negative = a
   // deduction waterfalled across the year's released months.
+  //
+  // A payback is excluded here too. It is normally raised on exactly this kind of voucher --
+  // no commission line, just the expense -- so without this exclusion it would land in the
+  // refund pool, which is the behaviour being replaced.
   const [expOnly] = await pool.query(
     `SELECT cve.amount
        FROM commission_voucher_expenses cve
        JOIN commission_vouchers cv ON cv.id = cve.commission_voucher_id
       WHERE cv.employee_id = ? AND YEAR(cv.date_created) = ? AND cv.status <> 'void'
+        ${targeted ? 'AND cve.applies_to_payable_id IS NULL' : ''}
         AND NOT EXISTS (SELECT 1 FROM commission_voucher_lines cvl WHERE cvl.commission_voucher_id = cv.id)`,
     [employeeId, year]
   );
@@ -121,13 +181,25 @@ async function releaseByMonthForEmployee(employeeId, year) {
     if (firstGross >= 1) refundedByMonth[firstGross] = round2(refundedByMonth[firstGross] + remaining);
   }
 
-  // Net columns: Released = gross - deducted + refunded; Deducted is shown NET of the refunds that
-  // cancelled it (0 once fully refunded).
+  // Paybacks: applied to the month they were pointed at, and to nothing else. Deliberately not
+  // folded into the refund pool or the deduction waterfall above -- a payback settles an
+  // overpayment on ONE month, and spilling it into another would move an overpayment around
+  // rather than clear it.
+  const paybackByMonth = await paybackByMonthForEmployee(employeeId, year);
+
+  // Net columns: Released = gross - deducted + refunded - payback; Deducted is shown NET of the
+  // refunds that cancelled it (0 once fully refunded), and is untouched by a payback -- which is
+  // exactly what makes a payback move `unpaid` where a refund cannot.
   for (let m = 1; m <= 12; m += 1) {
-    releasedByMonth[m] = round2(grossByMonth[m] - rawDeductedByMonth[m] + refundedByMonth[m]);
+    releasedByMonth[m] = round2(grossByMonth[m] - rawDeductedByMonth[m] + refundedByMonth[m] - paybackByMonth[m]);
     deductedByMonth[m] = round2(Math.max(rawDeductedByMonth[m] - refundedByMonth[m], 0));
   }
-  return { releasedByMonth, deductedByMonth, refundedByMonth };
+  // grossReleasedByMonth: what the vouchers paid against each month BEFORE any deduction, less a
+  // payback aimed at that month -- the source system's "Released Commission" (2026-10-03: Nina's
+  // January is 6,248.53 there, the sum of her five voucher lines, not 3,008.57 after the waterfall).
+  const grossReleasedByMonth = new Array(13).fill(0);
+  for (let m = 1; m <= 12; m += 1) grossReleasedByMonth[m] = round2(grossByMonth[m] - paybackByMonth[m]);
+  return { releasedByMonth, deductedByMonth, refundedByMonth, paybackByMonth, grossReleasedByMonth };
 }
 
 // Net released / deducted / refunded allocated to a single payable across every voucher that pays
@@ -141,6 +213,7 @@ async function releaseForPayable(payableId) {
      WHERE cvl.commission_payable_id = ? AND cv.status <> 'void'`,
     [payableId]
   );
+  const targeted = await hasTargetColumn();
   let released = 0; let deducted = 0; let refunded = 0;
   for (const { vid } of vs) {
     const [lines] = await pool.query(
@@ -149,13 +222,34 @@ async function releaseForPayable(payableId) {
        WHERE cvl.commission_voucher_id = ?`,
       [vid]
     );
-    const [exps] = await pool.query('SELECT amount FROM commission_voucher_expenses WHERE commission_voucher_id = ?', [vid]);
+    const [exps] = await pool.query(
+      `SELECT ${expenseSelect(targeted)} FROM commission_voucher_expenses WHERE commission_voucher_id = ?`,
+      [vid],
+    );
     const { d, r } = splitExpenses(exps);
     for (const a of allocateVoucher(lines.map((l) => ({ pid: l.pid, month: Number(l.month), gross: Number(l.gross) })), d, r)) {
       if (Number(a.pid) === Number(payableId)) { released += a.net; deducted += a.deducted; refunded += a.refunded; }
     }
   }
-  return { released: round2(released), deducted: round2(deducted), refunded: round2(refunded) };
+
+  // Paybacks pointed at THIS payable, from any voucher -- including an expense-only one that
+  // never appears in the line join above, which is how a payback is usually raised.
+  let payback = 0;
+  if (targeted) {
+    const [[row]] = await pool.query(
+      `SELECT COALESCE(SUM(cve.amount), 0) AS total
+         FROM commission_voucher_expenses cve
+         JOIN commission_vouchers cv ON cv.id = cve.commission_voucher_id
+         JOIN chart_of_accounts coa ON coa.id = cve.account_id
+        WHERE cve.applies_to_payable_id = ? AND coa.account_code = ? AND cv.status <> 'void'`,
+      [payableId, COMMISSION_PAYABLE_CODE],
+    );
+    payback = round2(row.total);
+  }
+
+  return {
+    released: round2(released - payback), deducted: round2(deducted), refunded: round2(refunded), payback,
+  };
 }
 
 module.exports = { allocateVoucher, releaseByMonthForEmployee, releaseForPayable };

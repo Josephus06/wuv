@@ -17,7 +17,7 @@ const ROUTE = '/users';
 router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
   try {
     const [rows] = await pool.query(
-      'SELECT account_type, page_id, can_view, can_add, can_edit, can_delete, can_approve FROM account_type_permissions'
+      'SELECT account_type, page_id, can_view, can_add, can_edit, can_update, can_view_all, can_delete, can_approve, can_print, can_void FROM account_type_permissions'
     );
     const byType = {};
     rows.forEach((r) => {
@@ -41,18 +41,21 @@ router.put('/:accountType', requireAuth, requirePermission(ROUTE, 'can_edit'), a
     await conn.query('DELETE FROM account_type_permissions WHERE account_type = ?', [accountType]);
     for (const p of permissions) {
       if (!p.page_id) continue;
-      if (!p.can_view && !p.can_add && !p.can_edit && !p.can_delete && !p.can_approve) continue;
+      // can_update belongs in this test too: a page where it is the ONLY box ticked is a real
+      // grant (an artist who may advance a Job Order but not edit it -- the case the permission
+      // was added for) and leaving it out silently dropped that row instead of saving it.
+      if (!p.can_view && !p.can_add && !p.can_edit && !p.can_update && !p.can_view_all && !p.can_delete && !p.can_approve && !p.can_print && !p.can_void) continue;
       await conn.query(
         `INSERT INTO account_type_permissions
-           (account_type, page_id, can_view, can_add, can_edit, can_delete, can_approve, updated_at, updated_by_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)`,
-        [accountType, p.page_id, !!p.can_view, !!p.can_add, !!p.can_edit, !!p.can_delete, !!p.can_approve, req.user.id]
+           (account_type, page_id, can_view, can_add, can_edit, can_update, can_view_all, can_delete, can_approve, can_print, can_void, updated_at, updated_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)`,
+        [accountType, p.page_id, !!p.can_view, !!p.can_add, !!p.can_edit, !!p.can_update, !!p.can_view_all, !!p.can_delete, !!p.can_approve, !!p.can_print, !!p.can_void, req.user.id]
       );
     }
     await conn.commit();
 
     const [rows] = await pool.query(
-      'SELECT account_type, page_id, can_view, can_add, can_edit, can_delete, can_approve FROM account_type_permissions WHERE account_type = ?',
+      'SELECT account_type, page_id, can_view, can_add, can_edit, can_update, can_view_all, can_delete, can_approve, can_print, can_void FROM account_type_permissions WHERE account_type = ?',
       [accountType]
     );
     res.json(rows);

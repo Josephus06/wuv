@@ -5,6 +5,7 @@ import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
 import EntityPicker from '../components/EntityPicker';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayAuditTime } from '../utils/dates';
 
 // Mirrors the real system's "Master Lists > PMS - Job Types" screen: a granular,
 // time-tracking breakdown of production tasks (e.g. "RFNO" / "DESIGN-Ready file with
@@ -183,7 +184,7 @@ export default function PmsJobTypes() {
               <h3>System Information</h3>
               <DataTable
                 columns={[
-                  { key: 'set_at', label: 'Date Time', render: (r) => new Date(r.set_at).toLocaleString() },
+                  { key: 'set_at', label: 'Date Time', render: (r) => displayAuditTime(r.set_at) },
                   { key: 'set_by_name', label: 'Set By' },
                   { key: 'event_type', label: 'Type' },
                   { key: 'field_name', label: 'Field' },

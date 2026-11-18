@@ -470,7 +470,7 @@ export const GUIDES = {
   'quality-control': {
     where: 'Production → Production → open the JO → Quality Inspection',
     route: '/quality-inspections',
-    who: 'Needs can_edit on Production.',
+    who: 'Needs Can Add on Quality Inspection.',
     summary: 'Inspects the built units and splits them into passed quantity and RMA (rejected) quantity. Only inspected units can be delivered.',
     steps: [
       'Open the Job Order once it has an uninspected build and click Quality Inspection.',
@@ -488,7 +488,7 @@ export const GUIDES = {
   'damaged-qc': {
     where: 'Production → Quality Inspection',
     route: '/quality-inspections',
-    who: 'Production staff with can_edit on Production.',
+    who: 'Production staff with Can Add on Quality Inspection.',
     summary: 'Did the inspection reject anything? A rejected (RMA) quantity raises an RFQC rework job; a clean pass goes on to invoicing.',
     steps: [
       'Read the RMA quantity on the Quality Inspection.',

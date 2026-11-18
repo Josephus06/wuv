@@ -3,11 +3,14 @@ import api from '../api/client';
 import EntityPicker from './EntityPicker';
 import LoadingSpinner from './LoadingSpinner';
 
+import { displayDate } from '../utils/dates';
+import { lineDepartmentError } from '../utils/requireDepartment';
+
 function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
 
 // Mirrors computeLineAmounts in routes/creditMemos.js exactly, so this preview and the
 // record the server writes can never disagree.
@@ -15,14 +18,16 @@ function lineAmounts(l) {
   const qty = Number(l.quantity || 0);
   const price = Number(l.price_per_unit || 0);
   const pct = Number(l.disc_percent || 0);
-  const subtotal = price * qty;
-  const discAmount = subtotal * (pct / 100);
-  const discPerUnit = price * (pct / 100);
-  const netOfTax = subtotal - discAmount;
-  const taxAmount = netOfTax * (Number(l.tax_rate || 0) / 100);
+  // Rounded per line exactly as routes/creditMemos.js saves it, so the totals shown are the ones saved.
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const subtotal = r2(price * qty);
+  const discAmount = r2(subtotal * (pct / 100));
+  const discPerUnit = Math.round(price * (pct / 100) * 10000) / 10000;
+  const netOfTax = r2(subtotal - discAmount);
+  const taxAmount = r2(netOfTax * (Number(l.tax_rate || 0) / 100));
   return {
     subtotal, discAmount, discPerUnit, discPricePerUnit: price - discPerUnit,
-    netOfTax, taxAmount, grossAmount: netOfTax + taxAmount,
+    netOfTax, taxAmount, grossAmount: r2(netOfTax + taxAmount),
   };
 }
 
@@ -54,7 +59,9 @@ export default function CreditMemoModal({ invoiceId, onClose, onSaved }) {
     Promise.all([
       api.get(`/credit-memos/for-invoice/${invoiceId}`),
       api.get('/lookups/departments'),
-      api.get('/inventory'),
+      // A credit memo's lines are Discount items (DISCOUNT, EX-DEAL, SALES ADJUSTMENT, WRITE OFF...),
+      // as on the source -- the default item list leaves that type out altogether.
+      api.get('/inventory', { params: { item_type: 'Discount' } }),
       api.get('/lookups/taxes'),
     ]).then(([srcRes, deptRes, itemRes, taxRes]) => {
       const d = srcRes.data;
@@ -140,6 +147,8 @@ export default function CreditMemoModal({ invoiceId, onClose, onSaved }) {
     setError('');
     const payload = rows.filter((r) => Number(r.quantity) > 0);
     if (!payload.length) { setError('Add at least one item to credit.'); return; }
+    const deptError = lineDepartmentError(payload);
+    if (deptError) { setError(deptError); return; }
     if (overApplied) {
       setError(`Applied Amount (${money(appliedTotal)}) exceeds this Credit Memo's own total (${money(totals.grossAmount)}).`);
       return;
@@ -217,7 +226,7 @@ export default function CreditMemoModal({ invoiceId, onClose, onSaved }) {
                 <table>
                   <thead>
                     <tr>
-                      <th>#</th><th>JO #</th><th>Item</th><th>Description</th><th>Department</th><th>Qty</th>
+                      <th>#</th><th>JO #</th><th>Item</th><th>Description</th><th>Department *</th><th>Qty</th>
                       <th>Unit</th><th>Price/Unit</th><th>Subtotal</th><th>Disc.%</th><th>Disc. / Unit</th>
                       <th>Disc. Amt</th><th>Disc. Price/Unit</th><th>Net of Tax</th><th>Tax Code</th>
                       <th>Tax Amt</th><th>Gross Amt</th><th></th>

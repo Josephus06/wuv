@@ -1,17 +1,22 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
+import { usePeriodLocked } from '../utils/periodLock';
 import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import LoadingSpinner from '../components/LoadingSpinner';
+import BillCreditModal from '../components/BillCreditModal';
+import { SupplierLink } from '../components/PartyLink';
+import { displayDate, displayAuditTime } from '../utils/dates';
 
 function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
 
-const STATUS_LABELS = { open: 'Open', voided: 'Voided' };
+// fully_applied: migrated from the source with its own status (import-bill-credits.js).
+const STATUS_LABELS = { open: 'Open', fully_applied: 'Fully Applied', voided: 'Voided' };
 
 // Mirrors the real "Bill Credit" detail view -- reached from a Vendor Bill's Related
 // Records tab after crediting it, or from the Bill Credits list.
@@ -24,6 +29,7 @@ export default function BillCreditView() {
   const [auditLogs, setAuditLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState('');
 
   function load() {
@@ -52,10 +58,18 @@ export default function BillCreditView() {
     }
   }
 
+  // Closed accounting period: no Edit / Void / Cancel (utils/periodLock.js; the server refuses them too).
+  const periodLocked = usePeriodLocked(bc?.date_created, 'ap');
+
   if (loading || !bc) return <LoadingSpinner />;
 
-  const canEdit = can('/bill-credits', 'can_edit');
-  const isOpen = bc.status === 'open';
+  const canEdit = (can('/bill-credits', 'can_edit') && !periodLocked);
+  const canVoid = (can('/bill-credits', 'can_void') && !periodLocked);
+  // Fully Applied can still be voided: the server reverses its bill applications, and refuses
+  // with the reason if a payment or cheque has spent it.
+  const isOpen = bc.status !== 'voided';
+  // What it was created from: a Vendor Bill, or a Cheque to the vendor.
+  const source = bc.vendor_bill_id ? `/vendor-bills/${bc.vendor_bill_id}` : `/cheques/${bc.cheque_id}`;
   const unapplied = Number(bc.total_amount) - Number(bc.applied_amount);
 
   return (
@@ -63,14 +77,20 @@ export default function BillCreditView() {
       <div className="page-header">
         <div />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate(`/vendor-bills/${bc.vendor_bill_id}`)}>Back</button>
-          {canEdit && <button className="btn btn-sm" disabled title="Editing a saved Bill Credit isn't implemented in this build">Edit</button>}
+          <Link className="btn btn-sm" to={source}>Back</Link>
+          {/* A voided credit is final; one already spent on a payment or cheque opens read-only with the reason. */}
+          {canEdit && bc.status !== 'voided' && <button className="btn btn-sm" onClick={() => setEditing(true)}>Edit</button>}
           <button className="btn btn-sm" disabled title="Print formats aren't implemented in this build">Print</button>
-          {canEdit && isOpen && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
+          {canVoid && isOpen && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
         </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+      {periodLocked && (
+        <div className="warning-banner" style={{ marginBottom: 12 }}>
+          The accounting period for this transaction is closed ({periodLocked}), so it can no longer be edited, voided or cancelled.
+        </div>
+      )}
 
       <div className="estimate-banner">
         <div className="estimate-banner-title">
@@ -78,11 +98,11 @@ export default function BillCreditView() {
           <span className="estimate-no">{bc.bill_credit_no}</span>
         </div>
         <div className="estimate-status">{STATUS_LABELS[bc.status] || bc.status}</div>
-        <div><button type="button" className="link-btn" onClick={() => navigate(`/vendor-bills/${bc.vendor_bill_id}`)}>{bc.bill_no}</button></div>
+        <div><Link className="link-btn" to={source}>{bc.bill_no}</Link></div>
 
         <div className="estimate-detail-grid">
           <div>
-            <div>Vendor : <span className="hi">{bc.supplier_name}</span></div>
+            <div>Vendor : <span className="hi"><SupplierLink id={bc.vendor_id} name={bc.supplier_name} /></span></div>
             <div>TIN : <span className="hi">{bc.tin || ''}</span></div>
             <div>A/P Account : <span className="hi">{bc.ap_account_code ? `${bc.ap_account_code} — ${bc.ap_account_name}` : '—'}</span></div>
           </div>
@@ -152,7 +172,7 @@ export default function BillCreditView() {
                 )}
                 {bc.applications.map((a) => (
                   <tr key={a.id}>
-                    <td><button type="button" className="link-btn" onClick={() => navigate(`/vendor-bills/${a.vendor_bill_id}`)}>{a.bill_no}</button></td>
+                    <td><Link className="link-btn" to={`/vendor-bills/${a.vendor_bill_id}`}>{a.bill_no}</Link></td>
                     <td>{money(a.applied_amount)}</td>
                   </tr>
                 ))}
@@ -198,7 +218,7 @@ export default function BillCreditView() {
         <div className="card">
           <DataTable
             columns={[
-              { key: 'set_at', label: 'Date Time', render: (r) => new Date(r.set_at).toLocaleString() },
+              { key: 'set_at', label: 'Date Time', render: (r) => displayAuditTime(r.set_at) },
               { key: 'set_by_name', label: 'Set By' },
               { key: 'event_type', label: 'Type' },
               { key: 'field_name', label: 'Field' },
@@ -209,6 +229,14 @@ export default function BillCreditView() {
             emptyLabel="No audit history yet."
           />
         </div>
+      )}
+
+      {editing && (
+        <BillCreditModal
+          billCreditId={bc.id}
+          onClose={() => setEditing(false)}
+          onSaved={() => { setEditing(false); load(); }}
+        />
       )}
     </div>
   );

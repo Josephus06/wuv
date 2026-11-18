@@ -1,0 +1,730 @@
+/* =============================================================================
+   GLASS — the frosted surfaces themselves.
+   =============================================================================
+
+   tokens.css carries the palette and re-points the compatibility layer, so the
+   COLOURS already reach every screen. This file carries the STRUCTURE: the blur
+   levels, the lit top edge, the control geometry and the pill shapes.
+
+   Everything here is scoped to :root[data-theme='glass']. Nothing leaks into
+   light or dark, so the DAY MODE toggle keeps working exactly as it does now.
+
+   A NOTE ON THE INSET HIGHLIGHT. `inset 0 1px 0 rgba(255,255,255,.14)` is the
+   whole trick: a one-pixel lit edge along the top where a real pane would catch
+   the light. Without it the surface reads as a flat grey rectangle no matter how
+   much blur is behind it. It is the first thing to check if a panel looks wrong.
+   ========================================================================== */
+
+/* --- The shell ----------------------------------------------------------- */
+/* Glass only reads as glass if there is colour behind it. Three wide radial
+   washes -- navy top-left, a single orange bloom top-right, deep navy bottom --
+   give the blur something to pick up. FIXED, so the colour stays put while the
+   page scrolls; a gradient that scrolls with content reads as a long painted
+   strip rather than as light in the room. */
+:root[data-theme='glass'] body {
+  background-color: var(--glass-ground);
+  background-image:
+    radial-gradient(920px 640px at 8% -14%, rgba(46, 86, 162, 0.62), transparent 62%),
+    radial-gradient(720px 540px at 94% 2%, rgba(244, 121, 31, 0.30), transparent 62%),
+    radial-gradient(760px 560px at 56% 114%, rgba(24, 52, 106, 0.70), transparent 62%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  color: var(--glass-text);
+  font-family: var(--glass-font-body);
+  font-size: var(--glass-text-body);
+}
+
+/* The wallpaper feature paints its own fixed layer behind everything. With the
+   glass gradients on, the two fight -- so the wallpaper wins and the gradients
+   stand down; the user's own picture is a better backdrop than ours. */
+:root[data-theme='glass'][data-bg='on'] body { background-image: none; }
+
+/* --- Type ---------------------------------------------------------------- */
+/* Space Grotesk carries anything a reader scans for a number: headings, money,
+   quantities, JO numbers. IBM Plex Sans carries the prose around them. */
+:root[data-theme='glass'] h1,
+:root[data-theme='glass'] h2,
+:root[data-theme='glass'] h3,
+:root[data-theme='glass'] .hi,
+:root[data-theme='glass'] .hi-lg,
+:root[data-theme='glass'] .estimate-no,
+:root[data-theme='glass'] th,
+:root[data-theme='glass'] .stat-value {
+  font-family: var(--glass-font-display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+:root[data-theme='glass'] h1 { font-size: var(--glass-text-page-title); }
+:root[data-theme='glass'] h3 { font-size: var(--glass-text-card-title); }
+:root[data-theme='glass'] label,
+:root[data-theme='glass'] .field label { font-size: var(--glass-text-label); }
+:root[data-theme='glass'] .muted,
+:root[data-theme='glass'] small { font-size: var(--glass-text-caption); color: var(--glass-text-muted); }
+
+/* Tabular figures so a column of money lines up on the decimal point. Space
+   Grotesk ships the feature; without it the digits are proportional and a
+   right-aligned column still looks ragged. */
+:root[data-theme='glass'] td,
+:root[data-theme='glass'] .hi,
+:root[data-theme='glass'] .hi-lg { font-variant-numeric: tabular-nums; }
+
+/* --- L2: cards, panels, the sidebar -------------------------------------- */
+:root[data-theme='glass'] .card,
+:root[data-theme='glass'] .fb-card,
+:root[data-theme='glass'] .estimate-banner {
+  background: var(--glass-l2-bg);
+  border: 1px solid var(--glass-l2-border);
+  border-radius: var(--glass-radius-card);
+  -webkit-backdrop-filter: blur(var(--glass-l2-blur));
+  backdrop-filter: blur(var(--glass-l2-blur));
+  box-shadow: var(--glass-l2-shadow);
+}
+
+/* Glass inside glass stops at one level: a card nested in a card takes a flat
+   navy tint, because two blurs stacked read as smeared rather than layered. */
+:root[data-theme='glass'] .card .card,
+:root[data-theme='glass'] .fb-card .fb-card {
+  background: var(--glass-inner);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+/* --- L3: overlays -------------------------------------------------------- */
+:root[data-theme='glass'] .modal,
+:root[data-theme='glass'] .topnav-mobile-panel {
+  background: var(--glass-l3-bg);
+  border: 1px solid var(--glass-l3-border);
+  border-radius: var(--glass-radius-panel);
+  -webkit-backdrop-filter: blur(var(--glass-l3-blur));
+  backdrop-filter: blur(var(--glass-l3-blur));
+  box-shadow: var(--glass-l3-shadow);
+}
+
+/* --- L1: rows and inline chips ------------------------------------------- */
+:root[data-theme='glass'] .topnav,
+:root[data-theme='glass'] .status-tabs .status-tab {
+  background: var(--glass-l1-bg);
+  border-color: var(--glass-l1-border);
+  -webkit-backdrop-filter: blur(var(--glass-l1-blur));
+  backdrop-filter: blur(var(--glass-l1-blur));
+}
+
+/* --- Buttons -------------------------------------------------------------- */
+:root[data-theme='glass'] .btn {
+  min-height: var(--glass-control-height);
+  border-radius: var(--glass-radius-control);
+  font-family: var(--glass-font-body);
+  font-weight: 500;
+  /* L1 glass is the secondary button; primary and destructive override below. */
+  background: var(--glass-l1-bg);
+  border: 1px solid var(--glass-l1-border);
+  color: var(--glass-text);
+  -webkit-backdrop-filter: blur(var(--glass-l1-blur));
+  backdrop-filter: blur(var(--glass-l1-blur));
+}
+:root[data-theme='glass'] .btn:hover { background: rgba(255, 255, 255, 0.09); }
+
+/* The one loud thing on the screen. Its glow is what marks it as the action the
+   page is for -- which only works while it is the only glow. */
+:root[data-theme='glass'] .btn-primary {
+  background: var(--glass-accent);
+  border-color: var(--glass-accent);
+  color: var(--glass-on-accent);
+  box-shadow: var(--glass-accent-glow);
+}
+:root[data-theme='glass'] .btn-primary:hover { background: #FF8A33; border-color: #FF8A33; }
+
+:root[data-theme='glass'] .btn-danger {
+  background: rgba(255, 107, 90, 0.14);
+  border-color: rgba(255, 107, 90, 0.38);
+  color: var(--glass-danger-soft);
+  box-shadow: none;
+}
+:root[data-theme='glass'] .btn-warning {
+  background: rgba(244, 121, 31, 0.14);
+  border-color: rgba(244, 121, 31, 0.38);
+  color: var(--glass-accent-soft);
+  box-shadow: none;
+}
+/* .btn-sm stays compact -- a 44px minimum inside a table row would double the
+   height of every row. The 44px target applies to standalone controls. */
+:root[data-theme='glass'] .btn-sm { min-height: 32px; border-radius: 10px; }
+
+/* --- Inputs --------------------------------------------------------------- */
+
+/* The parts of a form control the browser draws itself, which no colour property of
+   ours reaches: the calendar button inside a date field, a select's arrow, the date
+   picker that drops out of it, and the scrollbars. Left to itself the browser assumes
+   a light page and paints them near-black, so on this theme's near-transparent dark
+   fields the calendar button on Date From / Date To was all but invisible.
+
+   color-scheme is the one declaration that tells the browser the truth, and it fixes
+   the widget and its popup together -- inverting the icon with a filter would have
+   left the picker itself a white sheet on a dark page. */
+:root[data-theme='glass'] { color-scheme: dark; }
+
+:root[data-theme='glass'] input,
+:root[data-theme='glass'] select,
+:root[data-theme='glass'] textarea {
+  background: var(--glass-l1-bg);
+  border: 1px solid var(--glass-l1-border);
+  border-radius: var(--glass-radius-control);
+  color: var(--glass-text);
+  font-family: var(--glass-font-body);
+  min-height: var(--glass-control-height);
+}
+:root[data-theme='glass'] input::placeholder,
+:root[data-theme='glass'] textarea::placeholder { color: var(--glass-text-muted); }
+:root[data-theme='glass'] input:focus,
+:root[data-theme='glass'] select:focus,
+:root[data-theme='glass'] textarea:focus {
+  outline: 2px solid var(--glass-accent);
+  outline-offset: 2px;
+  border-color: var(--glass-accent);
+}
+:root[data-theme='glass'] input[aria-invalid='true'],
+:root[data-theme='glass'] .field-error input {
+  background: rgba(255, 107, 90, 0.12);
+  border-color: rgba(255, 107, 90, 0.45);
+}
+:root[data-theme='glass'] .error-banner {
+  background: rgba(255, 107, 90, 0.14);
+  border: 1px solid rgba(255, 107, 90, 0.38);
+  color: var(--glass-danger-soft);
+  border-radius: var(--glass-radius-control);
+}
+:root[data-theme='glass'] .warning-banner {
+  background: rgba(244, 121, 31, 0.14);
+  border: 1px solid rgba(244, 121, 31, 0.38);
+  color: var(--glass-accent-soft);
+  border-radius: var(--glass-radius-control);
+}
+
+/* A visible focus ring on everything keyboard-reachable, at the same 2px offset
+   the inputs use, so tabbing through a form does not change ring geometry. */
+:root[data-theme='glass'] a:focus-visible,
+:root[data-theme='glass'] button:focus-visible,
+:root[data-theme='glass'] [tabindex]:focus-visible {
+  outline: 2px solid var(--glass-accent);
+  outline-offset: 2px;
+  border-radius: var(--glass-radius-control);
+}
+
+/* --- Status pills --------------------------------------------------------- */
+/* Tinted fill, a matching border and light text of the same hue -- so a status
+   reads at a glance by colour and still says what it is. */
+:root[data-theme='glass'] .badge {
+  border-radius: var(--glass-radius-pill);
+  border: 1px solid;
+  font-family: var(--glass-font-body);
+  font-weight: 500;
+  font-size: var(--glass-text-label);
+  padding: 4px 12px;
+}
+:root[data-theme='glass'] .badge-info,
+:root[data-theme='glass'] .badge-muted {
+  background: rgba(91, 143, 214, 0.16);
+  border-color: rgba(91, 143, 214, 0.38);
+  color: var(--glass-navy-light);
+}
+:root[data-theme='glass'] .badge-warning {
+  background: rgba(244, 121, 31, 0.16);
+  border-color: rgba(244, 121, 31, 0.40);
+  color: var(--glass-accent-soft);
+}
+:root[data-theme='glass'] .badge-success {
+  background: rgba(79, 209, 165, 0.16);
+  border-color: rgba(79, 209, 165, 0.38);
+  color: var(--glass-ok-soft);
+}
+:root[data-theme='glass'] .badge-danger {
+  background: rgba(255, 107, 90, 0.16);
+  border-color: rgba(255, 107, 90, 0.38);
+  color: var(--glass-danger-soft);
+}
+
+/* --- Tables --------------------------------------------------------------- */
+/* Rows separated by a hairline, never a card each: twenty columns of ERP data in
+   twenty little floating cards is unreadable, and the blur cost alone would be
+   felt on a list of 500. */
+:root[data-theme='glass'] table { border-collapse: separate; border-spacing: 0; }
+:root[data-theme='glass'] th {
+  background: transparent;
+  color: var(--glass-text-3);
+  font-size: var(--glass-text-label);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--glass-l2-border);
+}
+:root[data-theme='glass'] td {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--glass-text-2);
+}
+:root[data-theme='glass'] tbody tr:hover td { background: rgba(255, 255, 255, 0.04); }
+
+/* The selected row: an orange wash with an outline, rounded only at the two ends
+   of the run so it reads as one continuous band rather than a row of chips. */
+:root[data-theme='glass'] tbody tr.is-selected td,
+:root[data-theme='glass'] tbody tr[aria-selected='true'] td {
+  background: rgba(244, 121, 31, 0.13);
+  border-top: 1px solid rgba(244, 121, 31, 0.38);
+  border-bottom: 1px solid rgba(244, 121, 31, 0.38);
+  color: var(--glass-text);
+}
+:root[data-theme='glass'] tbody tr.is-selected td:first-child,
+:root[data-theme='glass'] tbody tr[aria-selected='true'] td:first-child {
+  border-left: 1px solid rgba(244, 121, 31, 0.38);
+  border-top-left-radius: 12px; border-bottom-left-radius: 12px;
+}
+:root[data-theme='glass'] tbody tr.is-selected td:last-child,
+:root[data-theme='glass'] tbody tr[aria-selected='true'] td:last-child {
+  border-right: 1px solid rgba(244, 121, 31, 0.38);
+  border-top-right-radius: 12px; border-bottom-right-radius: 12px;
+}
+
+/* --- Links and nav -------------------------------------------------------- */
+:root[data-theme='glass'] a { color: var(--glass-navy-light); }
+:root[data-theme='glass'] a:hover { color: var(--glass-text); }
+/* Orange marks where you ARE -- the one active item, nothing else. */
+:root[data-theme='glass'] .topnav-menu > .topnav-dropdown > button.active,
+:root[data-theme='glass'] .status-tab.active {
+  background: rgba(244, 121, 31, 0.14);
+  border-color: rgba(244, 121, 31, 0.38);
+  color: var(--glass-accent-soft);
+}
+
+/* --- Charts --------------------------------------------------------------- */
+:root[data-theme='glass'] .recharts-cartesian-grid line { stroke: rgba(255, 255, 255, 0.09); }
+:root[data-theme='glass'] .recharts-text { fill: var(--glass-text-3); font-size: var(--glass-text-caption); }
+
+/* --- Fallbacks and motion -------------------------------------------------- */
+/* Where backdrop-filter is unsupported every level collapses to one opaque navy.
+   Translucency without blur is not a softer version of this design, it is
+   unreadable text over a gradient. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root[data-theme='glass'] .card,
+  :root[data-theme='glass'] .fb-card,
+  :root[data-theme='glass'] .estimate-banner,
+  :root[data-theme='glass'] .modal,
+  :root[data-theme='glass'] .topnav,
+  :root[data-theme='glass'] .topnav-mobile-panel,
+  :root[data-theme='glass'] .btn,
+  :root[data-theme='glass'] input,
+  :root[data-theme='glass'] select,
+  :root[data-theme='glass'] textarea {
+    background: var(--glass-fallback);
+  }
+  :root[data-theme='glass'] .btn-primary { background: var(--glass-accent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme='glass'] *,
+  :root[data-theme='glass'] *::before,
+  :root[data-theme='glass'] *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* =============================================================================
+   PRINT — the glass theme stops at the paper's edge.
+   =============================================================================
+   The print sheets (Job Order, Purchase Order, Estimate, Invoice, Itinerary) are
+   white A4 pages with their own type and rules. They render OUTSIDE the app shell
+   but still inside <body>, so without this they inherit the gradient, the glass
+   text colours and the 44px control heights -- and a Job Order handed to the
+   floor comes out as pale blue text on a dark wash, or as nothing at all once the
+   printer drops the background.
+
+   Backgrounds are usually dropped by default at print time, which is exactly what
+   makes this dangerous: the panels vanish and the light text is left on white.
+   ========================================================================== */
+@media print {
+  :root[data-theme='glass'] body {
+    background: #fff;
+    color: #111827;
+    font-family: var(--font-sans);
+  }
+  :root[data-theme='glass'] .card,
+  :root[data-theme='glass'] .fb-card,
+  :root[data-theme='glass'] .modal,
+  :root[data-theme='glass'] .estimate-banner {
+    background: #fff;
+    color: #111827;
+    border-color: #cbd5e1;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  :root[data-theme='glass'] th,
+  :root[data-theme='glass'] td { color: #111827; border-color: #cbd5e1; }
+  /* The sheets style themselves completely; this only stops the theme reaching in. */
+  :root[data-theme='glass'] .jo-sheet,
+  :root[data-theme='glass'] .po-sheet,
+  :root[data-theme='glass'] .itn-sheet { color: inherit; }
+}
+
+/* =============================================================================
+   THE REST OF THE SHELL
+   ========================================================================== */
+/* The topbar sits ON the gradient rather than over content, so it takes the L1
+   tint and a hairline underneath instead of a card's full border. */
+:root[data-theme='glass'] .topnav {
+  border-bottom: 1px solid var(--glass-l1-border);
+  box-shadow: none;
+}
+:root[data-theme='glass'] .topnav-dropdown > button,
+:root[data-theme='glass'] .topnav-menu a { color: var(--glass-text-2); }
+:root[data-theme='glass'] .topnav-dropdown > button:hover,
+:root[data-theme='glass'] .topnav-menu a:hover { color: var(--glass-text); }
+
+/* The desktop flyouts are overlays -- L3, like every other thing that floats. */
+:root[data-theme='glass'] .topnav-dropdown-menu,
+:root[data-theme='glass'] .topnav-mega {
+  background: var(--glass-l3-bg);
+  border: 1px solid var(--glass-l3-border);
+  border-radius: var(--glass-radius-card);
+  -webkit-backdrop-filter: blur(var(--glass-l3-blur));
+  backdrop-filter: blur(var(--glass-l3-blur));
+  box-shadow: var(--glass-l3-shadow);
+}
+:root[data-theme='glass'] .topnav-mega-title { color: var(--glass-text-muted); }
+
+/* Tabs read as one L1 strip with the current one carrying the single orange. */
+:root[data-theme='glass'] .status-tabs { border-bottom-color: var(--glass-l1-border); }
+:root[data-theme='glass'] .status-tab { color: var(--glass-text-3); border-radius: var(--glass-radius-control); }
+:root[data-theme='glass'] .status-tab:hover { color: var(--glass-text); }
+
+:root[data-theme='glass'] .page-header { border-bottom-color: var(--glass-l1-border); }
+:root[data-theme='glass'] .empty-state { color: var(--glass-text-muted); }
+:root[data-theme='glass'] .subsection { color: var(--glass-text-2); }
+:root[data-theme='glass'] hr { border-color: var(--glass-l1-border); }
+
+/* Toast and chat float above everything, so they are overlays too. */
+:root[data-theme='glass'] .app-toast {
+  background: var(--glass-l3-bg);
+  border: 1px solid var(--glass-l3-border);
+  border-radius: var(--glass-radius-control);
+  color: var(--glass-text);
+  -webkit-backdrop-filter: blur(var(--glass-l3-blur));
+  backdrop-filter: blur(var(--glass-l3-blur));
+  box-shadow: var(--glass-l3-shadow);
+}
+
+/* The dashboard's holo tiles carry their own gradients and are deliberately not
+   flat -- left alone, but their container stops competing with them. */
+:root[data-theme='glass'] .holo-dashboard { background: transparent; }
+
+/* A dark scrollbar; the default light one cuts a bright stripe down the page. */
+:root[data-theme='glass'] ::-webkit-scrollbar { width: 10px; height: 10px; }
+:root[data-theme='glass'] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+:root[data-theme='glass'] ::-webkit-scrollbar-track { background: transparent; }
+
+/* =============================================================================
+   PRINT, part two — the things the first block missed.
+   =============================================================================
+   Found by rendering the print rules and looking at them: resetting `body` and
+   `td` is not enough, because several glass rules set `color` at a higher
+   specificity and survive into print as near-white ink on white paper.
+
+   What came out blank: every secondary and small BUTTON label, the value inside
+   every INPUT, and the whole SELECTED ROW -- which is the row someone printing a
+   list is most likely to care about. All of them were legible on screen and gone
+   on paper, which is the worst way for this to fail.
+
+   These selectors match their screen counterparts exactly and sit later in the
+   file, so they win on order rather than by !important.
+   ========================================================================== */
+@media print {
+  :root[data-theme='glass'] .btn,
+  :root[data-theme='glass'] .btn-primary,
+  :root[data-theme='glass'] .btn-danger,
+  :root[data-theme='glass'] .btn-warning,
+  :root[data-theme='glass'] input,
+  :root[data-theme='glass'] select,
+  :root[data-theme='glass'] textarea {
+    background: transparent;
+    color: #111827;
+    border-color: #cbd5e1;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  /* The selected row keeps its outline -- on paper that is the only thing saying
+     which row was picked -- but the ink goes dark. */
+  :root[data-theme='glass'] tbody tr.is-selected td,
+  :root[data-theme='glass'] tbody tr[aria-selected='true'] td {
+    background: transparent;
+    color: #111827;
+    border-top-color: #9a3412;
+    border-bottom-color: #9a3412;
+  }
+  :root[data-theme='glass'] tbody tr.is-selected td:first-child,
+  :root[data-theme='glass'] tbody tr[aria-selected='true'] td:first-child { border-left-color: #9a3412; }
+  :root[data-theme='glass'] tbody tr.is-selected td:last-child,
+  :root[data-theme='glass'] tbody tr[aria-selected='true'] td:last-child { border-right-color: #9a3412; }
+
+  /* Pills print as outlined text rather than tinted fills, which drop out when
+     the printer ignores backgrounds and take their light ink with them. */
+  :root[data-theme='glass'] .badge,
+  :root[data-theme='glass'] .badge-info,
+  :root[data-theme='glass'] .badge-muted,
+  :root[data-theme='glass'] .badge-warning,
+  :root[data-theme='glass'] .badge-success,
+  :root[data-theme='glass'] .badge-danger {
+    background: transparent;
+    color: #111827;
+    border-color: #6b7280;
+  }
+  :root[data-theme='glass'] .muted,
+  :root[data-theme='glass'] small,
+  :root[data-theme='glass'] a { color: #374151; }
+  :root[data-theme='glass'] .error-banner,
+  :root[data-theme='glass'] .warning-banner { background: transparent; color: #111827; border-color: #6b7280; }
+}
+
+/* =============================================================================
+   DASHBOARD
+   =============================================================================
+   The dashboard was built before the theme system and drives itself from its own
+   --dash-* / --holo-* variables, which is why the shared card rules never reached
+   it: its cards are .holo-card, not .card, and it paints its own page background
+   over the top of the shell's gradient.
+
+   So this re-points its variables the same way tokens.css re-points the app's
+   compatibility layer -- change the token, the whole dashboard follows.
+   ========================================================================== */
+:root[data-theme='glass'] .holo-dashboard {
+  /* Transparent, so the shell gradient shows through instead of a flat panel
+     being painted over it. */
+  background: transparent;
+  color: var(--glass-text);
+
+  --dash-bg: transparent;
+  --dash-card-bg: var(--glass-l2-bg);
+  --dash-text: var(--glass-text);
+  --dash-text-dim: var(--glass-text-3);
+  --dash-border: var(--glass-l2-border);
+  --dash-card-shadow: var(--glass-l2-shadow);
+
+  /* The dashboard's own ramp, re-pointed onto the brand. The four figures were
+     purple / blue / green / lime, none of which is in the palette. */
+  --dash-purple: var(--glass-navy-mid);
+  --dash-blue: var(--glass-navy-mid);
+  --dash-green: var(--glass-ok);
+  --dash-lime: var(--glass-navy-light);
+
+  --holo-text: var(--glass-text);
+  --holo-text-dim: var(--glass-text-3);
+  --holo-card-border: var(--glass-l2-border);
+  /* The neon widget hues become the brand's, so the orb and the donuts read as
+     instruments rather than as a second colour scheme arriving on the page. */
+  --holo-cyan: var(--glass-navy-mid);
+  --holo-violet: var(--glass-navy-light);
+  --holo-magenta: var(--glass-accent);
+  --holo-amber: var(--glass-accent);
+  --holo-green: var(--glass-ok);
+}
+
+:root[data-theme='glass'] .holo-header h1 { color: var(--glass-text); }
+:root[data-theme='glass'] .holo-header .holo-sub { color: var(--glass-text-3); }
+:root[data-theme='glass'] .holo-empty { color: var(--glass-text-muted); }
+
+/* --- Cards ---------------------------------------------------------------- */
+:root[data-theme='glass'] .holo-card {
+  background: var(--glass-l2-bg);
+  border: 1px solid var(--glass-l2-border);
+  border-radius: var(--glass-radius-card);
+  -webkit-backdrop-filter: blur(var(--glass-l2-blur));
+  backdrop-filter: blur(var(--glass-l2-blur));
+  box-shadow: var(--glass-l2-shadow);
+}
+:root[data-theme='glass'] .holo-card h3 { color: var(--glass-text-2); }
+:root[data-theme='glass'] .holo-card:hover { box-shadow: var(--glass-l2-shadow); }
+
+/* --- The four figures ------------------------------------------------------ */
+/* Navy and its tints, graded so the four are still told apart at a glance, and NO
+   orange among them. The one orange on this screen is the revenue line in the
+   chart -- the brief names it, and two oranges on a page means one of them has
+   stopped meaning anything.
+
+   They keep a fill rather than becoming plain glass: these are the figures the
+   page exists for, and four panes of the same glass as everything else would bury
+   them. A tint still lets the gradient through. */
+:root[data-theme='glass'] .holo-stat-card {
+  color: var(--glass-text);
+  border: 1px solid var(--glass-l2-border);
+  border-radius: var(--glass-radius-card);
+  -webkit-backdrop-filter: blur(var(--glass-l2-blur));
+  backdrop-filter: blur(var(--glass-l2-blur));
+  box-shadow: var(--glass-l2-shadow);
+}
+:root[data-theme='glass'] .holo-stat-card.tone-purple {
+  background: linear-gradient(135deg, rgba(27, 59, 112, 0.72), rgba(27, 59, 112, 0.44));
+}
+:root[data-theme='glass'] .holo-stat-card.tone-blue {
+  background: linear-gradient(135deg, rgba(46, 86, 162, 0.72), rgba(46, 86, 162, 0.42));
+}
+:root[data-theme='glass'] .holo-stat-card.tone-green {
+  background: linear-gradient(135deg, rgba(91, 143, 214, 0.60), rgba(91, 143, 214, 0.34));
+}
+:root[data-theme='glass'] .holo-stat-card.tone-lime {
+  /* #A6C2EA at a low alpha over this ground desaturates to grey and reads as a mistake
+     beside three blues. Held at a mid tint instead so the fourth step still says navy. */
+  background: linear-gradient(135deg, rgba(127, 168, 223, 0.52), rgba(127, 168, 223, 0.26));
+}
+:root[data-theme='glass'] .holo-stat-card:hover { box-shadow: var(--glass-l3-shadow); }
+:root[data-theme='glass'] .holo-stat-label { color: var(--glass-text-2); }
+:root[data-theme='glass'] .holo-stat-value { font-family: var(--glass-font-display); color: var(--glass-text); }
+:root[data-theme='glass'] .holo-stat-icon {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+/* --- The chart tile -------------------------------------------------------- */
+/* Glass stops at one level and this sits inside a .holo-card, so it is a flat navy
+   panel rather than a second pane. Its violet/cyan nebula is replaced by the
+   shell's own two hues so the tile reads as part of the page. */
+:root[data-theme='glass'] .holo-tile-dark {
+  --holo-text-dim: var(--glass-text-3);
+  background:
+    radial-gradient(ellipse 400px 240px at 20% -10%, rgba(46, 86, 162, 0.55), transparent 60%),
+    radial-gradient(ellipse 300px 220px at 100% 110%, rgba(244, 121, 31, 0.18), transparent 55%),
+    var(--glass-inner);
+  border: 1px solid var(--glass-l1-border);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-theme='glass'] .holo-tile-dark .holo-donut-value { color: var(--glass-text); }
+:root[data-theme='glass'] .holo-tile-dark .holo-donut-sub { color: var(--glass-text-3); }
+
+/* --- Bars, rings and rows -------------------------------------------------- */
+:root[data-theme='glass'] .holo-barlist-track { background: rgba(255, 255, 255, 0.09); }
+:root[data-theme='glass'] .holo-barlist-label { color: var(--glass-text-3); }
+:root[data-theme='glass'] .holo-barlist-value { color: var(--glass-text); font-family: var(--glass-font-display); }
+:root[data-theme='glass'] .holo-activity-row { border-color: var(--glass-l1-border); }
+:root[data-theme='glass'] .holo-activity-row:hover { background: rgba(255, 255, 255, 0.05); }
+:root[data-theme='glass'] .holo-activity-main { color: var(--glass-text-2); }
+:root[data-theme='glass'] .holo-activity-sub { color: var(--glass-text-muted); }
+:root[data-theme='glass'] .holo-role-badge {
+  background: rgba(244, 121, 31, 0.16);
+  border: 1px solid rgba(244, 121, 31, 0.38);
+  color: var(--glass-accent-soft);
+}
+
+/* --- The Feed / My Dashboard switcher -------------------------------------- */
+/* A white pill sitting on the gradient -- the one thing on screen that had not
+   been told about the theme. An L1 strip now, with orange on the current tab:
+   that is "where you are", which is what the accent is for. */
+:root[data-theme='glass'] .fbfeed.plain { background: transparent; }
+:root[data-theme='glass'] .fb-tabs {
+  background: var(--glass-l1-bg);
+  border: 1px solid var(--glass-l1-border);
+  border-radius: var(--glass-radius-pill);
+  -webkit-backdrop-filter: blur(var(--glass-l1-blur));
+  backdrop-filter: blur(var(--glass-l1-blur));
+}
+:root[data-theme='glass'] .fb-tab {
+  color: var(--glass-text-3);
+  border-radius: var(--glass-radius-pill);
+  font-family: var(--glass-font-body);
+}
+:root[data-theme='glass'] .fb-tab:hover { background: rgba(255, 255, 255, 0.07); color: var(--glass-text); }
+:root[data-theme='glass'] .fb-tab.active {
+  background: rgba(244, 121, 31, 0.16);
+  color: var(--glass-accent-soft);
+  box-shadow: inset 0 0 0 1px rgba(244, 121, 31, 0.38);
+}
+
+/* --- The feed cards beside it ---------------------------------------------- */
+/* The profile card and the rails are .fb-card, already covered above -- but the
+   feed itself paints a page background of its own, same as the dashboard did. */
+:root[data-theme='glass'] .fbfeed { background: transparent; }
+:root[data-theme='glass'] .fb-rail-title { color: var(--glass-text-2); }
+
+/* =============================================================================
+   FEED
+   =============================================================================
+   The same shape of problem as the dashboard, and worse in effect. The feed is
+   scoped under .fbfeed with its own --fb-* tokens, and it defines them exactly
+   twice: a light set on .fbfeed, and a dark set on :root[data-theme='dark']
+   .fbfeed.
+
+   Glass matched NEITHER, so it fell back to the light set and the feed painted
+   --fb-text #050505 -- near-black -- onto a near-black page. The shared .fb-card
+   rule had already fixed the panels, so the cards looked right and the writing
+   inside them had simply gone: the shortcut rail, the timestamps, the reaction
+   counts. The composer kept its #f0f2f5 fill, the one light-grey slab left.
+
+   Almost every rule in feed.css reads these tokens rather than naming a colour,
+   so re-pointing them here is the whole fix -- .fb-rail-item, the least readable
+   thing on the page, is just `color: var(--fb-text)`. The two literal darks that
+   remain (.fb-preview-remove, .fb-lightbox-nav) are deliberately dark ink on a
+   white circular button floating over a photograph, and are correct in any theme.
+   ========================================================================== */
+:root[data-theme='glass'] .fbfeed {
+  --fb-bg: transparent;
+  --fb-card: var(--glass-l2-bg);
+  --fb-text: var(--glass-text);
+  --fb-text-2: var(--glass-text-2);
+  --fb-text-3: var(--glass-text-3);
+  --fb-divider: var(--glass-l1-border);
+  --fb-hover: rgba(255, 255, 255, 0.07);
+  --fb-input: var(--glass-l1-bg);
+  --fb-input-hover: rgba(255, 255, 255, 0.09);
+  /* The feed's "blue" is its link and action colour, not a brand accent, so it
+     maps to the navy tints -- which leaves the single orange for the active tab. */
+  --fb-blue: var(--glass-navy-light);
+  --fb-blue-hover: var(--glass-text);
+  --fb-blue-soft: rgba(91, 143, 214, 0.16);
+  --fb-red: var(--glass-danger);
+  --fb-shadow: var(--glass-l2-shadow);
+  --fb-shadow-lg: var(--glass-l3-shadow);
+
+  color: var(--glass-text);
+}
+
+/* The cards need the blur and the lit edge as well as the fill -- .fb-card reads
+   --fb-card for its background and carries no backdrop-filter of its own. */
+:root[data-theme='glass'] .fb-card {
+  border: 1px solid var(--glass-l2-border);
+  border-radius: var(--glass-radius-card);
+  -webkit-backdrop-filter: blur(var(--glass-l2-blur));
+  backdrop-filter: blur(var(--glass-l2-blur));
+  box-shadow: var(--glass-l2-shadow);
+}
+
+/* The composer is an input in everything but name, so it takes the input shape. */
+:root[data-theme='glass'] .fb-composer-trigger {
+  border: 1px solid var(--glass-l1-border);
+  border-radius: var(--glass-radius-pill);
+  color: var(--glass-text-3);
+}
+
+/* A comment bubble sits inside a card, and glass stops at one level. */
+:root[data-theme='glass'] .fb-comment-bubble { background: var(--glass-inner); }
+
+/* The online dot rings itself with the card colour to punch a hole in the avatar
+   edge. That colour is translucent now, so the ring has to be drawn explicitly or
+   the dot loses its outline against the photo underneath. */
+:root[data-theme='glass'] .fb-online-dot { border-color: rgba(11, 29, 61, 0.92); }
+
+/* Chat boxes keep their own light / dark palette in glass mode (index.css --chat-*), so the glass
+   input rule above -- light text on a frosted field -- made what you type invisible on the white
+   chat box (asked 2026-10-14). Inside a chat box, inputs take the chat's colours instead. */
+:root[data-theme='glass'] .chat-box .cc-input textarea {
+  background: transparent;
+  color: var(--chat-text);
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  min-height: 36px;
+}
+:root[data-theme='glass'] .chat-box .cc-input textarea::placeholder { color: var(--chat-dim); }
+:root[data-theme='glass'] .chat-box input,
+:root[data-theme='glass'] .chat-box textarea { color: var(--chat-text); }

@@ -1,8 +1,45 @@
 const express = require('express');
 const pool = require('../db');
-const { requireAuth, requirePermission } = require('../middleware/auth');
+const { requireAuth, requirePermission, isSystemAdmin } = require('../middleware/auth');
+
+const { insertFor } = require('../lib/approvalNotifications');
 
 const router = express.Router();
+
+// The bell (2026-11-12): a new certificate tells the approvers -- the General Managers, as
+// mayApprove() below defines them -- and an approval tells whoever made it. After the commit, and a
+// failure is only logged: a notification must never block or undo the certificate.
+async function approverIds() {
+  const [rows] = await pool.query(
+    `SELECT id FROM users WHERE is_active = 1
+        AND (account_type = 'General Manager' OR id IN (SELECT user_id FROM general_managers))`);
+  return rows.map((r) => r.id);
+}
+async function notifyWc(kind, wcId, actorId) {
+  try {
+    const [[wc]] = await pool.query(
+      `SELECT wc.wc_no, wc.created_by_user_id, so.sales_order_no AS so_no, c.name AS customer_name
+         FROM warranty_certificates wc
+         LEFT JOIN sales_orders so ON so.id = wc.sales_order_id
+         LEFT JOIN customers c ON c.id = wc.customer_id
+        WHERE wc.id = ?`, [wcId]);
+    if (!wc) return;
+    const about = [wc.so_no, wc.customer_name].filter(Boolean).join(', ');
+    if (kind === 'pending') {
+      await insertFor(await approverIds(), {
+        type: 'wc_pending_approval', title: `${wc.wc_no} needs your approval`,
+        message: `Warranty Certificate ${wc.wc_no}${about ? ` (${about})` : ''} is pending approval.`,
+        relatedType: 'WarrantyCertificate', relatedId: wcId,
+      }, actorId);
+    } else {
+      await insertFor([wc.created_by_user_id], {
+        type: 'wc_approved', title: `${wc.wc_no} was approved`,
+        message: `Warranty Certificate ${wc.wc_no}${about ? ` (${about})` : ''} has been approved.`,
+        relatedType: 'WarrantyCertificate', relatedId: wcId,
+      }, actorId);
+    }
+  } catch (err) { console.error('[notifications] warranty certificate:', err.message); }
+}
 // Warranty Certificate (WC-##): raised against a BILLED Sales Order. Pulls the SO's job orders in as
 // warranty lines (coverage type + warranty date range + optional extended warranty). Pending
 // Approval -> Approved (only then can it be Printed) -> Void.
@@ -72,7 +109,7 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const [rows] = await pool.query(
       `SELECT wc.id, wc.wc_no, wc.date_created, wc.status, wc.contract_description,
-              c.name AS customer_name, so.sales_order_no
+              wc.customer_id, c.name AS customer_name, so.sales_order_no
        FROM warranty_certificates wc
        LEFT JOIN customers c ON c.id = wc.customer_id
        LEFT JOIN sales_orders so ON so.id = wc.sales_order_id
@@ -152,6 +189,7 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
     await logAudit(conn, { wcId, userId: req.user.id, eventType: 'Created', fieldName: 'wc_no', newValue: wcNo });
     await conn.commit();
     res.status(201).json({ id: wcId, wc_no: wcNo });
+    notifyWc('pending', wcId, req.user.id);
   } catch (err) { await conn.rollback(); next(err); } finally { conn.release(); }
 });
 
@@ -174,7 +212,20 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
   } catch (err) { await conn.rollback(); next(err); } finally { conn.release(); }
 });
 
-router.put('/:id/approve', requireAuth, requirePermission(ROUTE, 'can_approve'), async (req, res, next) => {
+// Approved by a General Manager (2026-10-28) -- one on the General Managers list or with that
+// account type -- or a System Admin.
+async function mayApprove(userId) {
+  if (await isSystemAdmin(userId)) return true;
+  const [[row]] = await pool.query(
+    `SELECT 1 AS x FROM users u WHERE u.id = ? AND u.is_active = 1
+        AND (u.account_type = 'General Manager' OR u.id IN (SELECT user_id FROM general_managers))`, [userId]);
+  return !!row;
+}
+
+router.put('/:id/approve', requireAuth, async (req, res, next) => {
+  if (!(await mayApprove(req.user.id).catch(() => false))) {
+    return res.status(403).json({ error: 'Only a General Manager can approve a Warranty Certificate.' });
+  }
   const conn = await pool.getConnection();
   try {
     const [[wc]] = await conn.query('SELECT status FROM warranty_certificates WHERE id = ?', [req.params.id]);
@@ -186,10 +237,11 @@ router.put('/:id/approve', requireAuth, requirePermission(ROUTE, 'can_approve'),
     await logAudit(conn, { wcId: req.params.id, userId: req.user.id, eventType: 'Approved', fieldName: 'status', oldValue: wc.status, newValue: 'approved' });
     await conn.commit();
     res.json({ ok: true });
+    notifyWc('approved', Number(req.params.id), req.user.id);
   } catch (err) { await conn.rollback(); next(err); } finally { conn.release(); }
 });
 
-router.put('/:id/void', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
+router.put('/:id/void', requireAuth, requirePermission(ROUTE, 'can_void'), async (req, res, next) => {
   const conn = await pool.getConnection();
   try {
     const [[wc]] = await conn.query('SELECT status FROM warranty_certificates WHERE id = ?', [req.params.id]);

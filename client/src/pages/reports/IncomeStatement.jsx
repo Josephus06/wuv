@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import api from '../../api/client';
+import CompanyBranchFilter, { toParams, ScopeNote } from '../../components/CompanyBranchFilter';
 import LoadingSpinner from '../../components/LoadingSpinner';
+import { REPORT_TIMING } from '../../utils/reportTiming';
 import { money } from './CoaTreeRows';
 
 function today() { return new Date().toISOString().slice(0, 10); }
@@ -8,6 +10,8 @@ function today() { return new Date().toISOString().slice(0, 10); }
 const BREAKDOWN_OPTIONS = [
   { value: 'total', label: 'Total Only' },
   { value: 'months', label: 'Months' },
+  // One column per company in the group (each branch's company, locations.company_id).
+  { value: 'company', label: 'Company' },
   { value: 'location', label: 'Location' },
   { value: 'department', label: 'Department' },
 ];
@@ -27,7 +31,8 @@ function SectionRows({ sections, columns, onDrill }) {
         <td style={{ paddingLeft: 24 + depth * 20 }}>{a.account_code}</td>
         <td style={depth === 0 && a.children && a.children.length ? { fontWeight: 600 } : undefined}>{a.account_name}</td>
         {a.amounts.map((v, i) => (
-          <td key={i} style={{ textAlign: 'right' }}>
+          // The breakdown's Total column (2026-10-26) in bold, so the row's sum reads apart from its parts.
+          <td key={i} style={{ textAlign: 'right', ...(columns[i]?.key === '__total' ? { fontWeight: 600 } : {}) }}>
             {v ? (
               <button type="button" className="link-btn" style={{ color: 'var(--accent)', textDecoration: 'underline', cursor: 'pointer' }}
                 onClick={() => onDrill(a, columns[i])}>{money(v)}</button>
@@ -87,7 +92,10 @@ function TransactionsModal({ ctx, onClose }) {
               <tbody>
                 {data.rows.map((r, i) => (
                   <tr key={i}>
-                    <td>{r.source_no}</td>
+                    {/* Opens in a new tab so the report and this list stay where they are. */}
+                    <td>{r.link
+                      ? <a href={r.link} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--link, #2563eb)', textDecoration: 'underline' }}>{r.source_no}</a>
+                      : r.source_no}</td>
                     <td>{(r.entry_date || '').slice(0, 10)}</td>
                     <td>{r.name}</td>
                     <td style={{ textAlign: 'right' }}>{money(r.debit)}</td>
@@ -123,12 +131,36 @@ export default function IncomeStatement() {
   const [breakdown, setBreakdown] = useState('total');
   const [menuOpen, setMenuOpen] = useState(false);
   const [report, setReport] = useState(null);
+  // Company / branch (CompanyBranchFilter): blank is every company -- the consolidated view.
+  const [scope, setScope] = useState({ companyId: '', locationId: '' });
+  // The scope the statement on screen was generated for -- what Extract and the drill-down use.
+  const [ranScope, setRanScope] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [drill, setDrill] = useState(null);
+  // Extract: the report on screen, as a workbook -- the same dates and breakdown it was generated with.
+  const [exporting, setExporting] = useState(false);
+  async function extract() {
+    if (!report) return;
+    setExporting(true); setError('');
+    try {
+      const params = { asOf: report.as_of, breakdown: report.breakdown, ...ranScope };
+      if (report.from_date && filterType === 'period_from') params.from = report.from_date;
+      const { data } = await api.get('/reports/income-statement/export', { params, responseType: 'blob' });
+      const url = URL.createObjectURL(data);
+      const a = document.createElement('a');
+      a.href = url; a.download = `income-statement-${report.from_date}-to-${report.as_of}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError('Could not extract the Income Statement.');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   function handleDrill(account, column) {
-    const params = { accountCode: account.account_code, breakdown: report.breakdown, columnKey: column.key, asOf: report.as_of };
+    const params = { accountCode: account.account_code, breakdown: report.breakdown, columnKey: column.key, asOf: report.as_of, ...ranScope };
     if (report.from_date) params.from = report.from_date;
     const colPart = report.breakdown === 'total' ? '' : ` | ${column.label}`;
     setDrill({ params, title: `${account.account_code} | ${account.account_name} | ${report.from_date} to ${report.as_of}${colPart}` });
@@ -140,10 +172,11 @@ export default function IncomeStatement() {
     setLoading(true);
     setError('');
     try {
-      const params = { asOf, breakdown: mode };
+      const params = { asOf, breakdown: mode, ...toParams(scope) };
       if (filterType === 'period_from') params.from = fromDate;
       const { data } = await api.get('/reports/income-statement', { params });
       setReport(data);
+      setRanScope(toParams(scope));
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to generate report');
     } finally {
@@ -178,6 +211,7 @@ export default function IncomeStatement() {
             <label>{filterType === 'period_from' ? 'To' : 'Date as of'}</label>
             <input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} />
           </div>
+          <CompanyBranchFilter value={scope} onChange={setScope} />
         </div>
         <div style={{ position: 'relative', display: 'inline-block', marginTop: 12 }}>
           <button className="btn btn-primary" onClick={() => setMenuOpen((v) => !v)} disabled={loading}>
@@ -208,14 +242,16 @@ export default function IncomeStatement() {
 
       {error && <div className="card" style={{ color: '#b91c1c', marginBottom: 16 }}>{error}</div>}
 
-      {loading && <LoadingSpinner />}
+      {loading && <LoadingSpinner label="Generating..." expectedMs={REPORT_TIMING.incomeStatement} />}
 
       {!loading && report && (
         <div className="card">
-          <div style={{ marginBottom: 12 }}>
-            <strong>{report.from_date} to {report.as_of}</strong>
+          <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <button className="btn" disabled={exporting} onClick={extract} title="Download this report as Excel">{exporting ? 'Extracting...' : 'Extract'}</button>
+            <strong>{report.from_date} to {report.as_of}{report.scope ? ` — ${report.scope.label}` : ''}</strong>
             {report.breakdown !== 'total' && <span style={{ marginLeft: 12, color: 'var(--muted, #888)' }}>Breakdown: {BREAKDOWN_OPTIONS.find((o) => o.value === report.breakdown)?.label}</span>}
           </div>
+          <ScopeNote scope={report.scope} />
           <div className="table-wrap">
             <table className="responsive-cards">
               <thead>

@@ -4,6 +4,9 @@ import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate } from '../utils/dates';
+import useAutoSearch from '../utils/useAutoSearch';
+import SearchInput from '../components/SearchInput';
 
 const PAGE_SIZE = 10;
 const STATUS_TABS = [
@@ -15,7 +18,7 @@ const STATUS_TABS = [
 ];
 const STATUS_LABELS = Object.fromEntries(STATUS_TABS.map((t) => [t.key, t.label]));
 
-function formatDate(v) { return v ? String(v).slice(0, 10) : ''; }
+function formatDate(v) { return v ? displayDate(String(v).slice(0, 10)) : ''; }
 
 // Mirrors the real system's "Saved Purchase Requisitions" list. Request In-Process /
 // Partially Served / Completed all depend on a Purchase Order having picked the PR's
@@ -46,6 +49,7 @@ export default function PurchaseRequisitions() {
     setPage(1);
     load();
   }
+  useAutoSearch(search, runSearch);
 
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -54,14 +58,14 @@ export default function PurchaseRequisitions() {
     <div>
       <div className="page-header">
         <h1>Saved Purchase Requisitions</h1>
-        {can('/purchase-requisitions', 'can_add') && <button className="btn btn-primary" onClick={() => navigate('/purchase-requisitions/new')}>Add New</button>}
+        {can('/purchase-requisitions', 'can_add') && <Link className="btn btn-primary" to={'/purchase-requisitions/new'}>Add New</Link>}
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="PR No..." />
+            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="PR No..." />
           </div>
         </div>
         <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={runSearch}>Search</button>
@@ -104,7 +108,12 @@ export default function PurchaseRequisitions() {
                     <td data-label="Prepared By">{row.prepared_by_name}</td>
                     <td data-label="Status">{STATUS_LABELS[row.status] || row.status}</td>
                     <td data-label="Item Status">{row.item_status}</td>
-                    <td><Link className="btn btn-sm btn-primary" to={`/purchase-requisitions/${row.id}`}>View</Link></td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <Link className="btn btn-sm btn-primary" to={`/purchase-requisitions/${row.id}`}>View</Link>
+                      {can('/purchase-requisitions', 'can_edit') && row.status !== 'cancelled' && (
+                        <Link className="btn btn-sm" style={{ marginLeft: 6 }} to={`/purchase-requisitions/${row.id}/edit`}>Edit</Link>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

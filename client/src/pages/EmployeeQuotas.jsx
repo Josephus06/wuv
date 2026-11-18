@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
+import useAutoSearch from '../utils/useAutoSearch';
+import SearchInput from '../components/SearchInput';
 
 const PAGE_SIZE = 10;
 
@@ -25,6 +27,7 @@ export default function EmployeeQuotas() {
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function runSearch() { setPage(1); load(search); }
+  useAutoSearch(search, runSearch);
 
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -39,7 +42,7 @@ export default function EmployeeQuotas() {
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Employee name or code..." />
+            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Employee name or code..." />
           </div>
         </div>
         <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={runSearch}>Search</button>
@@ -63,7 +66,7 @@ export default function EmployeeQuotas() {
                     <td data-label="Position">{row.position_title}</td>
                     <td data-label="Department">{row.department_name}</td>
                     <td data-label="Quota Rows">{row.quota_count}</td>
-                    <td><button className="btn btn-sm btn-primary" onClick={() => navigate(`/employee-quotas/${row.id}`)}>View</button></td>
+                    <td><Link className="btn btn-sm btn-primary" to={`/employee-quotas/${row.id}`}>View</Link></td>
                   </tr>
                 ))}
               </tbody>

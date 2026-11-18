@@ -15,6 +15,9 @@ export default function EstimateApprovalModal({ estimateId, nextStatus, onClose,
   const [approvalCode, setApprovalCode] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Approving out of Pending Supervisor Approval (next = customer approval) is where low GP is
+  // decided. "Approved by Customer" only records the customer's answer -- no GP gate there.
+  const gpStage = nextStatus === 'pending_customer_approval';
 
   useEffect(() => {
     api.get(`/estimates/${estimateId}/approval-lines`).then(({ data: d }) => {
@@ -28,7 +31,10 @@ export default function EstimateApprovalModal({ estimateId, nextStatus, onClose,
     setError(''); setSaving(true);
     try {
       // Only below-GP lines that were ticked need the override flag (passing lines count anyway).
-      const approvedLowGp = (data.lines || []).filter((l) => !l.passed && checked[l.id]).map((l) => l.id);
+      // Low-GP approval belongs to the supervisor stage only; recording the customer's answer
+      // sends none (the server ignores them there too).
+      const approvedLowGp = !gpStage ? [] : (data.lines || [])
+        .filter((l) => !l.passed && !l.is_approved_low_gp && checked[l.id]).map((l) => l.id);
       await api.put(`/estimates/${estimateId}/status`, { status: nextStatus, approved_low_gp_line_ids: approvedLowGp });
       onApproved();
     } catch (e) { setError(e.response?.data?.error || 'Approval failed.'); setSaving(false); }
@@ -44,7 +50,7 @@ export default function EstimateApprovalModal({ estimateId, nextStatus, onClose,
             <input value={approvalCode} onChange={(e) => setApprovalCode(e.target.value)} />
           </div>
 
-          {!data.can_approve_low_gp && (data.lines || []).some((l) => !l.passed) && (
+          {gpStage && !data.can_approve_low_gp && (data.lines || []).some((l) => !l.passed && !l.is_approved_low_gp) && (
             <div className="muted" style={{ marginBottom: 8 }}>Below-GP lines can only be approved by an Admin or General Manager.</div>
           )}
 
@@ -77,7 +83,7 @@ export default function EstimateApprovalModal({ estimateId, nextStatus, onClose,
                           the ones an Admin/GM can override. */}
                       <input type="checkbox"
                         checked={l.passed ? true : !!checked[l.id]}
-                        disabled={l.passed || !data.can_approve_low_gp}
+                        disabled={l.passed || !gpStage || !data.can_approve_low_gp}
                         onChange={(e) => setChecked((c) => ({ ...c, [l.id]: e.target.checked }))} />
                     </td>
                   </tr>
@@ -86,8 +92,11 @@ export default function EstimateApprovalModal({ estimateId, nextStatus, onClose,
             </table>
           </div>
 
+          {/* Matches the button that opened this. nextStatus 'approved' is only reached from
+              pending customer approval, so that is the step where what is being recorded is the
+              CUSTOMER's decision rather than the operator's own. */}
           <button type="button" className="btn btn-primary" style={{ width: '100%', marginTop: 16 }} disabled={saving} onClick={approve}>
-            {saving ? 'Approving...' : 'Approve'}
+            {saving ? 'Approving...' : (nextStatus === 'approved' ? 'Approved by Customer' : 'Approve')}
           </button>
         </div>
       )}

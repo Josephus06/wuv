@@ -4,6 +4,10 @@ import api from '../api/client';
 import EntityPicker from '../components/EntityPicker';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { SupplierLink } from '../components/PartyLink';
+import { displayDate } from '../utils/dates';
+import useAutoSearch from '../utils/useAutoSearch';
+import SearchInput from '../components/SearchInput';
 
 // Mirrors the real "Saved Purchase Orders" list -- status tabs are a read-only bucket
 // derived from status + receipt_status + bill_status together (see purchaseOrders.js's
@@ -27,7 +31,7 @@ function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? String(v).slice(0, 10) : ''; }
+function formatDate(v) { return v ? displayDate(String(v).slice(0, 10)) : ''; }
 
 export default function PurchaseOrders() {
   const navigate = useNavigate();
@@ -35,23 +39,51 @@ export default function PurchaseOrders() {
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState({});
   const [loading, setLoading] = useState(true);
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(true); // shown by default; Toggle Filter hides them (asked 2026-10-06)
 
   const [status, setStatus] = useState('pending_approval');
   const [search, setSearch] = useState('');
   const [supplier, setSupplier] = useState(null);
+  // Period From / Date Created (As of): inclusive bounds on Date Created, applied on Search.
+  const [dateFrom, setDateFrom] = useState('');
   const [asOf, setAsOf] = useState('');
   const [page, setPage] = useState(1);
   const limit = 10;
 
   const [suppliers, setSuppliers] = useState([]);
 
-  async function load() {
-    setLoading(true);
-    const params = { status, page, limit };
+  function listParams() {
+    const params = { status };
     if (search) params.search = search;
     if (supplier) params.supplier_id = supplier.id;
+    if (dateFrom) params.date_from = dateFrom;
     if (asOf) params.as_of = asOf;
+    return params;
+  }
+
+  // Extract: every purchase order under the filters and status tab above, as a workbook
+  // (same params as the list).
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
+  async function runExport() {
+    setExporting(true); setExportError('');
+    try {
+      const { data } = await api.get('/purchase-orders/export', { params: listParams(), responseType: 'blob' });
+      const url = URL.createObjectURL(data);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'purchase-orders.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setExportError('Could not extract the purchase orders.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function load() {
+    setLoading(true);
+    const params = { ...listParams(), page, limit };
     const { data } = await api.get('/purchase-orders', { params });
     setRows(data.rows);
     setTotal(data.total);
@@ -66,6 +98,7 @@ export default function PurchaseOrders() {
     setPage(1);
     load();
   }
+  useAutoSearch(search, runSearch);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
@@ -78,7 +111,7 @@ export default function PurchaseOrders() {
           <button type="button" className="link-btn" onClick={() => setShowFilters((s) => !s)}>Toggle Filter</button>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-primary" onClick={() => navigate('/purchase-orders/new')}>Add Purchase Order</button>
+          <Link className="btn btn-primary" to={'/purchase-orders/new'}>Add Purchase Order</Link>
         </div>
       </div>
 
@@ -87,7 +120,7 @@ export default function PurchaseOrders() {
           <div className="filter-grid">
             <div className="field">
               <label>General Searching</label>
-              <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Search..." />
+              <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Search..." />
             </div>
             <div className="field">
               <label>Supplier</label>
@@ -95,7 +128,7 @@ export default function PurchaseOrders() {
                 <div style={{ flex: 1 }}>
                   <EntityPicker
                     label="Supplier" items={suppliers} value={supplier?.id || ''} getLabel={(s) => s?.name}
-                    columns={[{ key: 'name', label: 'Name' }]} searchKeys={['name']}
+                    columns={[{ key: 'name', label: 'Name' }, { key: 'address', label: 'Address', render: (s) => s.address || '—' }]} searchKeys={['name', 'address']}
                     onSelect={setSupplier}
                   />
                 </div>
@@ -103,11 +136,21 @@ export default function PurchaseOrders() {
               </div>
             </div>
             <div className="field">
+              <label>Period From</label>
+              <input type="date" value={dateFrom} max={asOf || undefined} onChange={(e) => setDateFrom(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} />
+            </div>
+            <div className="field">
               <label>Date Created (As of)</label>
-              <input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} />
+              <input type="date" value={asOf} min={dateFrom || undefined} onChange={(e) => setAsOf(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} />
             </div>
           </div>
-          <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={runSearch}>Search</button>
+          <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button className="btn btn-primary" onClick={runSearch}>Search</button>
+            <button className="btn" disabled={exporting} onClick={runExport} title="Download every purchase order under the filters and status tab above">
+              {exporting ? 'Extracting...' : 'Extract'}
+            </button>
+            {exportError && <span style={{ color: 'var(--danger)' }}>{exportError}</span>}
+          </div>
         </div>
       )}
 
@@ -155,7 +198,7 @@ export default function PurchaseOrders() {
                       <td data-label="PO No">{row.po_no}</td>
                       <td data-label="Ref. No">{row.ref_no}</td>
                       <td data-label="Date Created">{formatDate(row.date_created)}</td>
-                      <td data-label="Supplier">{row.supplier_name}</td>
+                      <td data-label="Supplier"><SupplierLink id={row.supplier_id} name={row.supplier_name} /></td>
                       <td data-label="Discount Amt">{money(row.discount_amount)}</td>
                       <td data-label="Total Amt (Net of VAT)">{money(row.net_of_tax)}</td>
                       <td data-label="Tax Amt">{money(row.tax_amount)}</td>

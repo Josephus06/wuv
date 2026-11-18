@@ -4,6 +4,9 @@ import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayMonth, displayDate } from '../utils/dates';
+import useAutoSearch from '../utils/useAutoSearch';
+import SearchInput from '../components/SearchInput';
 
 const PAGE_SIZE = 10;
 const STATUS_LABELS = { unpaid: 'Unpaid', partial: 'Partially Paid', paid: 'Paid', void: 'Void' };
@@ -12,8 +15,8 @@ function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatMonth(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : ''; }
-function formatDate(v) { return v ? String(v).slice(0, 10) : ''; }
+function formatMonth(v) { return v ? displayMonth(v) : ''; }
+function formatDate(v) { return v ? displayDate(String(v).slice(0, 10)) : ''; }
 
 export default function CommissionPayables() {
   const { can } = useAuth();
@@ -35,6 +38,7 @@ export default function CommissionPayables() {
 
   useEffect(() => { setPage(1); load(); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
   function runSearch() { setPage(1); load(); }
+  useAutoSearch(search, runSearch);
 
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -52,7 +56,7 @@ export default function CommissionPayables() {
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="CP # or Employee..." />
+            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="CP # or Employee..." />
           </div>
           <div className="field">
             <label>Status</label>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import api from '../api/client';
 import EntityPicker from '../components/EntityPicker';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -7,18 +7,54 @@ import LoadingSpinner from '../components/LoadingSpinner';
 function money(v) { const n = Number(v); return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'; }
 function today() { return new Date().toISOString().slice(0, 10); }
 
-// Create a Fund Transfer: move an amount from one bank account to another. GL: DR To / CR From.
+// Create or edit a Fund Transfer: move an amount from one bank account to another. GL: DR To / CR From.
 export default function FundTransferForm() {
   const navigate = useNavigate();
+  const { id } = useParams(); // set when editing (/fund-transfers/:id/edit)
+  // ?ftr=<form id>: Create Fund Transfer Voucher on an approved Fund Transfer Request (2026-10-14).
+  // Starts filled from it -- its banks and what is left to post -- and is saved against it.
+  const [searchParams] = useSearchParams();
+  const ftrId = id ? null : Number(searchParams.get('ftr')) || null;
+  const [ftrNo, setFtrNo] = useState('');
   const [meta, setMeta] = useState(null);
-  const [header, setHeader] = useState({ date_created: today(), from_account_id: '', to_account_id: '', amount: '', memo: '' });
+  const [ftNo, setFtNo] = useState('');
+  const [header, setHeader] = useState({ date_created: today(), from_account_id: '', to_account_id: '', amount: '', memo: '', office_location_id: '' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    api.get('/fund-transfers/meta').then(({ data }) => { setMeta(data); setLoading(false); }).catch((e) => { setError(e.response?.data?.error || 'Failed to load.'); setLoading(false); });
-  }, []);
+    Promise.all([api.get('/fund-transfers/meta'), id ? api.get(`/fund-transfers/${id}`) : null,
+      ftrId ? api.get(`/forms/${ftrId}`) : null])
+      .then(([m, ft, fr]) => {
+        setMeta(m.data);
+        if (fr) {
+          const f = fr.data;
+          const d = f.detail || {};
+          const items = (f.items || []).filter((it) => Number(it.amount) !== 0);
+          const first = items[0] || {};
+          setFtrNo(f.request_no);
+          setHeader((h) => ({
+            ...h,
+            from_account_id: d.from_account_id || first.from_account_id || '',
+            to_account_id: d.to_account_id || first.to_account_id || '',
+            amount: Number(f.voucher_remaining) || Number(d.total_amount) || '',
+            memo: [f.request_no, ...items.map((it) => it.particulars).filter(Boolean)].join(' -- ').slice(0, 1000),
+          }));
+        }
+        if (ft) {
+          const d = ft.data;
+          setFtNo(d.ft_no);
+          setHeader({
+            date_created: String(d.date_created || '').slice(0, 10), from_account_id: d.from_account_id || '',
+            to_account_id: d.to_account_id || '', amount: d.amount ?? '', memo: d.memo || '',
+            office_location_id: d.office_location_id || '',
+          });
+        }
+        setLoading(false);
+      })
+      .catch((e) => { setError(e.response?.data?.error || 'Failed to load.'); setLoading(false); });
+  }, [id, ftrId]);
 
   const setH = (patch) => setHeader((h) => ({ ...h, ...patch }));
   const acct = (id) => (meta?.accounts || []).find((a) => String(a.id) === String(id));
@@ -31,21 +67,25 @@ export default function FundTransferForm() {
     if (amt <= 0) { setError('Enter an amount greater than 0.'); return; }
     setSaving(true);
     try {
-      const { data } = await api.post('/fund-transfers', { ...header, amount: amt });
+      const { data } = id
+        ? await api.put(`/fund-transfers/${id}`, { ...header, amount: amt })
+        : await api.post('/fund-transfers', { ...header, amount: amt, ...(ftrId ? { form_request_id: ftrId } : {}) });
       navigate(`/fund-transfers/${data.id}`);
     } catch (e) { setError(e.response?.data?.error || 'Save failed.'); setSaving(false); }
   }
 
-  if (loading || !meta) return <LoadingSpinner />;
+  if (loading) return <LoadingSpinner />;
+  if (!meta) return <div className="error-banner">{error || 'Failed to load.'}</div>;
   const from = acct(header.from_account_id);
   const to = acct(header.to_account_id);
 
   return (
     <div>
       <div className="page-header">
-        <div style={{ fontWeight: 600 }}>Fund Transfer <span className="muted">/ Create</span></div>
+        <div style={{ fontWeight: 600 }}>Fund Transfer <span className="muted">/ {id ? `Edit ${ftNo}` : ftrNo ? `Create from ${ftrNo}` : 'Create'}</span></div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate('/fund-transfers')}>Back to Lists</button>
+          {id && <Link className="btn btn-sm" to={`/fund-transfers/${id}`}>Cancel</Link>}
+          <Link className="btn btn-sm" to={'/fund-transfers'}>Back to Lists</Link>
           <button className="btn btn-primary" disabled={saving} onClick={save}>{saving ? 'Saving...' : 'Save'}</button>
         </div>
       </div>
@@ -67,6 +107,16 @@ export default function FundTransferForm() {
                 columns={[{ key: 'account_code', label: 'Code' }, { key: 'account_name', label: 'Name' }]} searchKeys={['account_code', 'account_name']} placeholder="--Select--" onSelect={(a) => setH({ to_account_id: a?.id || '' })} />
             </div>
             <div className="field"><label>Amount</label><input type="number" step="0.01" value={header.amount} onChange={(e) => setH({ amount: e.target.value })} /></div>
+            {/* The branch -- and so the company -- whose books this transfer belongs to. */}
+            <div className="field">
+              <label>Branch</label>
+              <select value={header.office_location_id} onChange={(e) => setH({ office_location_id: e.target.value })}>
+                <option value="">--Select--</option>
+                {(meta.locations || []).map((l) => (
+                  <option key={l.id} value={l.id}>{l.company_name ? `${l.company_name} — ` : ''}{l.location_name}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="field"><label>Memo</label><textarea rows={5} value={header.memo} onChange={(e) => setH({ memo: e.target.value })} /></div>
         </div>

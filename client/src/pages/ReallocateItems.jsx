@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate } from '../utils/dates';
 
 function qty(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : '';
 }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
 
 // Mirrors the real "Reallocate Items" screen -- reached from a Transfer Order line's
 // Reallocate button. On-hand stock at a location is a *shared* pool: every pending
@@ -57,7 +58,11 @@ export default function ReallocateItems() {
     if (!lines.length) { setError('Select at least one order to commit qty to.'); return; }
     setSaving(true);
     try {
-      await api.post(`/transfer-orders/lines/${lineId}/reallocate`, { lines });
+      const { data: result } = await api.post(`/transfer-orders/lines/${lineId}/reallocate`, { lines });
+      // Stock the ticked orders needed was taken back from unticked ones, newest first -- say which.
+      if (result?.released?.length) {
+        alert(`Committed qty moved from:\n${result.released.map((r) => `${r.to_no}: ${qty(r.from)} -> ${qty(r.to)}`).join('\n')}`);
+      }
       navigate(`/transfer-orders/${id}`);
     } catch (err) {
       setError(err.response?.data?.error || 'Save failed');
@@ -68,12 +73,17 @@ export default function ReallocateItems() {
 
   if (loading || !data) return <LoadingSpinner />;
 
+  // Base Unit -> Stock Unit. A factor of 1 (or a missing one) leaves the two equal, which is
+  // correct for an item whose stock unit IS its base unit.
+  const factor = Number(data.conversion_factor) > 0 ? Number(data.conversion_factor) : 1;
+  const toStock = (v) => Number(v || 0) / factor;
+
   return (
     <div>
       <div className="page-header">
         <h1>Reallocate Items</h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate(`/transfer-orders/${id}`)}>Back</button>
+          <Link className="btn btn-sm" to={`/transfer-orders/${id}`}>Back</Link>
           <button className="btn btn-sm btn-primary" disabled={saving} onClick={handleSubmit}>Submit</button>
         </div>
       </div>
@@ -93,13 +103,26 @@ export default function ReallocateItems() {
         </div>
 
         <div className="estimate-detail-grid" style={{ marginTop: 16 }}>
+          {/* SU and BU were rendering the SAME field, so both columns printed 160.0000 for an item
+              held in sheets of 32 square feet -- the two can only be equal when the conversion
+              factor is 1. The server sends both figures in Base Unit plus that factor; the Stock
+              Unit column is the base figure divided down, exactly as the Bin Card derives its own
+              Balance(Stock Unit). */}
           <div>
-            <div>Quantity On Hand (SU) : <span className="hi">{qty(data.qty_on_hand)}</span></div>
-            <div>Quantity Committed (SU) : <span className="hi">{qty(data.qty_committed)}</span></div>
+            <div>Quantity On Hand (SU) : <span className="hi">{qty(toStock(data.qty_on_hand))}</span>
+              {data.stock_unit_title && <span className="muted"> {data.stock_unit_title}</span>}
+            </div>
+            <div>Quantity Committed (SU) : <span className="hi">{qty(toStock(data.qty_committed))}</span>
+              {data.stock_unit_title && <span className="muted"> {data.stock_unit_title}</span>}
+            </div>
           </div>
           <div>
-            <div>Quantity On Hand (BU) : <span className="hi">{qty(data.qty_on_hand)}</span></div>
-            <div>Quantity Committed (BU) : <span className="hi">{qty(data.qty_committed)}</span></div>
+            <div>Quantity On Hand (BU) : <span className="hi">{qty(data.qty_on_hand)}</span>
+              {data.base_unit_title && <span className="muted"> {data.base_unit_title}</span>}
+            </div>
+            <div>Quantity Committed (BU) : <span className="hi">{qty(data.qty_committed)}</span>
+              {data.base_unit_title && <span className="muted"> {data.base_unit_title}</span>}
+            </div>
           </div>
           <div>
             <div>Quantity Required : <span className="hi">—</span></div>
@@ -109,6 +132,9 @@ export default function ReallocateItems() {
       </div>
 
       <div className="card" style={{ marginTop: 20 }}>
+        <div className="muted" style={{ marginBottom: 8 }}>
+          Tick the orders to commit to. If on hand is already committed, what they need is taken back from the unticked orders, newest first.
+        </div>
         <div className="table-wrap">
           <table>
             <thead>
@@ -133,14 +159,19 @@ export default function ReallocateItems() {
                     <td>{formatDate(c.order_date)}</td>
                     <td>{formatDate(c.date_needed)}</td>
                     <td>
-                      <button type="button" className="link-btn" onClick={() => navigate(`/transfer-orders/${c.to_id}`)}>{c.to_no}</button>
+                      <Link className="link-btn" to={`/transfer-orders/${c.to_id}`}>{c.to_no}</Link>
                     </td>
                     <td>—</td>
                     <td>{qty(ordered)}</td>
                     <td>{qty(remaining)}</td>
                     <td>
+                      {/* Capped at Quantity Remaining, the column immediately to the left. There
+                          was no max at all, so stock could be reserved against a quantity the
+                          order had already shipped -- 3,626 against a line with 3,625.0233 left
+                          -- which fulfilment then refused, with Reallocate the only screen
+                          offering a way out and no way out in it. */}
                       <input
-                        type="number" step="0.0001" style={{ width: 100 }}
+                        type="number" step="0.0001" min="0" max={remaining} style={{ width: 100 }}
                         value={committedInputs[c.transfer_order_line_id] ?? 0}
                         onChange={(e) => setCommittedInputs((prev) => ({ ...prev, [c.transfer_order_line_id]: e.target.value }))}
                       />

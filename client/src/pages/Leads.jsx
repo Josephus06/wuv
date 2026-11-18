@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import EntityPicker from '../components/EntityPicker';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate } from '../utils/dates';
 
 const EMPTY = { company_name: '', contact_name: '', email: '', phone: '', source: '', sales_rep_id: '', memo: '' };
 const SOURCES = ['Referral', 'Website', 'Cold Call', 'Walk-in', 'Social Media', 'Trade Show', 'Other'];
 const STATUS_LABELS = { new: 'New', contacted: 'Contacted', qualified: 'Qualified', unqualified: 'Unqualified', converted: 'Converted' };
 const STATUS_BADGE = { new: 'badge-muted', contacted: 'badge-info', qualified: 'badge-success', unqualified: 'badge-danger', converted: 'badge-success' };
 
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
 
 // A Lead is a prospect that isn't a real Customer yet -- no real ERP transaction
 // (Estimate, Sales Order, etc.) can reference it, only crm_activities. Converting
@@ -144,7 +145,7 @@ export default function Leads() {
                 {can('/leads', 'can_edit') && row.status !== 'converted' && <button className="btn btn-sm" onClick={() => openEdit(row)}>Edit</button>}
                 {can('/leads', 'can_edit') && row.status !== 'converted' && <button className="btn btn-sm btn-primary" onClick={() => handleConvert(row)}>Convert</button>}
                 {row.status === 'converted' && row.converted_customer_id && (
-                  <button className="btn btn-sm" onClick={() => navigate(`/customers/${row.converted_customer_id}`)}>View Customer</button>
+                  <Link className="btn btn-sm" to={`/customers/${row.converted_customer_id}`}>View Customer</Link>
                 )}
               </>
             )}

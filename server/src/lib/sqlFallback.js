@@ -22,11 +22,22 @@ const { ticketVisibilityClause } = require('./ticketVisibility');
 //   use it.
 // System Admin additionally gets the owned tables via validated SQL too, since an admin
 // has no personal-scope boundary to begin with.
-const OPENAI_MODEL = 'gpt-4o-mini';
+// gpt-4o-mini was too weak for what this prompt asks of it. The prompt below is a large
+// one -- full schema, the employee directory, pre-fetched orders -- and on top of reading
+// all that it has to translate a question into correct SQL, or answer in the user's own
+// mix of English/Cebuano/Tagalog. Mini's failures were quiet rather than loud: plausible
+// SQL against the wrong column, and confidently wrong arithmetic (see
+// lib/unitConversion.js for the conversion case, which is now answered in code before it
+// ever reaches the model).
+//
+// Env-overridable because the token cost here is dominated by the prompt, not the reply,
+// so the model is the one lever that moves the bill -- it can be tuned per install
+// without a redeploy.
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 
 const CATALOG_TABLES = [
   'customers', 'suppliers', 'departments', 'inventories', 'inventory_locations',
-  'chart_of_accounts', 'service_items', 'employees',
+  'chart_of_accounts', 'service_items', 'employees', 'sales_divisions', 'locations',
 ];
 const OWNED_TABLES = [
   'estimates', 'sales_orders', 'job_orders', 'tickets', 'purchase_orders',
@@ -47,10 +58,12 @@ customers(id, customer_code, name, company_name, credit_limit, is_active)
 suppliers(id, supplier_code, name, company_name, is_active)
 departments(id, name, description, head_user_id, is_active)
 inventories(id, item_code, display_name, item_type, selling_price, average_cost, reorder_point, is_active)
-inventory_locations(id, inventory_id -> inventories.id, location_id, qty_on_hand, qty_committed)
+inventory_locations(id, inventory_id -> inventories.id, location_id -> locations.id, qty_on_hand, qty_committed)
+locations(id, location_code, location_name, location_type [one of: Branch, Warehouse, Design, Damaged, Delivery Charge, Technical, Subcon, Other], is_active) -- warehouses and branches. People name these in shorthand ("DPOD", "WH04", "Central"), so match with LIKE against BOTH location_name and location_code; stock questions about a named place JOIN inventory_locations to this table rather than guessing at location_id.
 chart_of_accounts(id, account_code, account_name, account_type, is_active)
 service_items(id, item_code, display_name, unit_price, is_active)
 employees(id, employee_code, first_name, last_name, department_id -> departments.id, position_title, is_active)
+sales_divisions(id, name, is_active)
 `.trim();
 
 // Status/priority columns are stored as underscore_case machine values, not the
@@ -62,7 +75,7 @@ employees(id, employee_code, first_name, last_name, department_id -> departments
 // observed in the data, not a guaranteed-exhaustive set.
 const OWNED_SCHEMA_DESCRIPTION = `
 estimates(id, estimate_no, date_created, customer_id -> customers.id, sales_division_id, contract_description, status [one of: pending_supervisor_approval, pending_customer_approval, approved, cancelled, disapproved], total_amount)
-sales_orders(id, sales_order_no, estimate_id -> estimates.id, date_created, customer_id -> customers.id, sales_division_id, status [one of: pending_for_jo, jo_in_process, pending_delivery, partially_delivered, pending_billing, pending_billing_partially_delivered, billed, cancelled], total_amount)
+sales_orders(id, sales_order_no, estimate_id -> estimates.id, date_created, customer_id -> customers.id, sales_division_id, status [one of: pending_for_jo, jo_in_process, pending_delivery, partially_delivered, pending_billing, pending_billing_partially_delivered, partially_billed, billed, cancelled], total_amount)
 job_orders(id, job_order_no, sales_order_id -> sales_orders.id, description, quantity, status [e.g. 'Planned - Pending for BOM', 'Released', 'Completed'], sub_status [e.g. 'For Artist', 'For Design Supervisor', 'Approved', 'For QI'], planned_start_at, planned_end_at, layout_started_at, layout_ended_at)
 tickets(id, ticket_no, department_id -> departments.id, subject, description, status [one of: open, in_progress, resolved, closed], priority [one of: low, normal, high], created_at, resolved_at)
 purchase_orders(id, po_no, date_created, supplier_id -> suppliers.id, status [e.g. 'pending_approval', 'pending_approval_gm', 'approved'], subtotal, net_of_tax, tax_amount)
@@ -117,12 +130,15 @@ function extractSelect(text) {
 // Order/estimate/JO numbers referenced in the question (or recent history) that we should
 // fetch on demand -- so "who created SO-65154?" works even when that order is older than the
 // capped recent-records snapshot. Still scoped to what the user may see when fetched.
+// NSTDJO is listed first so the alternation prefers it, though the leading \b already stops
+// "NSTDJO-171" from also matching as "JO-171" (there is no word boundary between D and J).
 function extractOrderRefs(text) {
-  const found = new Set((String(text).toUpperCase().match(/\b(?:SO|EST|JO)-\d+(?:-\d+)*\b/g) || []));
+  const found = new Set((String(text).toUpperCase().match(/\b(?:NSTDJO|SO|EST|JO)-\d+(?:-\d+)*\b/g) || []));
   return {
     so: [...found].filter((r) => r.startsWith('SO-')),
     est: [...found].filter((r) => r.startsWith('EST-')),
     jo: [...found].filter((r) => r.startsWith('JO-')),
+    nstdjo: [...found].filter((r) => r.startsWith('NSTDJO-')),
   };
 }
 
@@ -238,6 +254,23 @@ async function fetchReferencedOrders(contextText) {
        WHERE jo.job_order_no IN (?)`, [refs.jo]);
     if (rows.length) out.job_orders = rows;
   }
+  if (refs.nstdjo.length) {
+    // Guarded like the dashboard's NSTDJO figures -- these tables are not in every build.
+    const [tbl] = await pool.query("SHOW TABLES LIKE 'non_standard_job_orders'");
+    if (tbl.length) {
+      const [rows] = await pool.query(
+        `SELECT n.nstdjo_no, n.status, n.sub_status, n.description, n.quantity, n.delivery_date,
+                c.name AS customer_name,
+                CONCAT(rep.first_name, ' ', rep.last_name) AS sales_rep_name,
+                CONCAT(ar.first_name, ' ', ar.last_name) AS artist_name
+         FROM non_standard_job_orders n
+         LEFT JOIN customers c ON c.id = n.customer_id
+         LEFT JOIN employees rep ON rep.id = n.sales_rep_id
+         LEFT JOIN employees ar ON ar.id = n.artist_employee_id
+         WHERE n.nstdjo_no IN (?)`, [refs.nstdjo]);
+      if (rows.length) out.non_standard_job_orders = rows;
+    }
+  }
   return out;
 }
 
@@ -264,16 +297,20 @@ ${JSON.stringify(referencedOrders)}
 ${JSON.stringify(directory)}
 Rules:
 - If the question is about ONE specific named person and EMPLOYEE_DIRECTORY_DATA/DIRECTLY_NAMED_EMPLOYEE(S) answers it, output the answer as plain text prefixed with "ANSWER: " (one or two sentences, no markdown).
-- If the question isn't about this database at all -- general knowledge, unit conversion, plain arithmetic (e.g. "how many sqft is 2x2 ft") -- just answer it directly, prefixed with "ANSWER: ". Don't refuse or force it into a SQL query it was never asking for.
+- If the request isn't about this database at all, just answer it directly, prefixed with "ANSWER: ". This covers ANYTHING you can answer yourself -- general knowledge, unit conversion, arithmetic (e.g. "how many sqft is 2x2 ft"), checking grammar or spelling, rewriting or shortening a message, translating, drafting wording for a customer, explaining a term. The list is illustrative, not exhaustive: if you can answer it, do. Don't refuse and don't force it into a SQL query it was never asking for.
+- NEVER reply that you only assist with ERP data and SQL queries, or anything to that effect. You are the assistant inside this ERP and you help with whatever the person asks; refusing an ordinary request because it isn't a database question is always wrong.
 - Otherwise output ONLY a SQL statement. No markdown fences, no explanation, no trailing semicolon.
 - SELECT only -- never write/modify data.
 - Only reference the tables listed in the schema. Do not invent columns.
 - Always include a LIMIT clause (20 or fewer rows) unless the question asks for a single aggregate.
 - For name/code lookups, use LIKE '%...%' rather than an exact match unless the user gave a full, exact code -- a real item/customer/etc. is often referenced by a partial or approximate name. For status/priority columns, use an EXACT match (=) against one of the listed values -- never LIKE a human phrasing like "pending for customer approval" against the real stored value 'pending_customer_approval', map it to the exact value first.
 - Zero rows back is a perfectly good, honest answer ("no matching record"). Prefer writing a best-effort query over refusing -- only output NO_QUERY if the question is about something genuinely outside this schema entirely (e.g. asks to modify data, or about a topic no table here covers).
+- NEVER drop a condition the question asked for. If some part of it cannot be expressed against this schema -- a place, code or field you cannot resolve -- say so in plain text prefixed with "ANSWER: " instead of running a query without it. Quietly widening "negative stock in DPOD" into "negative stock anywhere" hands back the wrong set of rows as though it were the right one, and the person reading it has no way to tell.
 - This is a running conversation. Use the earlier messages to resolve follow-up questions -- "his", "that order", "and last month?", "what about the second one" refer back to what was just discussed. The warm, conversational tone applies ONLY to ANSWER:/greeting replies.
 - When you write SQL, output ONLY the SQL statement -- no sentence before or after it, no "let me look that up", no markdown. (The conversational phrasing of query results is added afterward.)
-- For a greeting or small talk ("hi", "hello", "thanks", "how are you"), just reply warmly in plain text (e.g. "Hi! How can I help?") -- do NOT write SQL or output NO_QUERY.`,
+- For a greeting or small talk ("hi", "hello", "thanks", "how are you"), just reply warmly in plain text (e.g. "Hi! How can I help?") -- do NOT write SQL or output NO_QUERY.
+- LANGUAGE. This company is in Cebu. People here write in English, Cebuano/Bisaya, Tagalog, or a mix of them in one sentence, and they will not switch to English for your benefit. Understand all of it and REPLY IN THE LANGUAGE THEY USED. "Pila ka estimates karon?" is "how many estimates today". "Kinsa ang artist sa JO-123?" is "who is the artist of JO-123". "Asa" = where, "unsa" = what, "pila" = how much/how many, "kanus-a" = when, "salamat" = thanks, "uy" is just a friendly particle carrying no meaning of its own.
+- Casual remarks, jokes and complaints in any of those languages are conversation, not failed queries. Answer them like a colleague would -- briefly, in kind. NEVER reply that you do not understand simply because a message is not in English or is not about data; "laaya uy" ("feeling drained, huh") deserves a human reply, not an apology.`,
     },
     ...historyMessages(history),
     { role: 'user', content: question },
@@ -310,6 +347,101 @@ async function countByStatus(fromSql, alias, whereSql, params, statusCol = 'stat
 // Pulls exactly what resolveScope()/ticketVisibilityClause() already say this user may
 // see -- the same helpers backing the Dashboard and Tickets routes -- capped per table
 // so the prompt stays small. Nothing here is LLM-controlled.
+// Weighted sales totalled per sales division, with a deliberate access rule:
+//
+//   System Admin / is_sales_manager -> every division
+//   everyone else                   -> only divisions they are actually in
+//   nobody who qualifies for neither -> nothing at all
+//
+// "Divisions they are in" is the union of two things, because neither alone is reliable:
+// the SBU divisions explicitly assigned to them (user_sales_divisions, which is only ever
+// populated for business-unit owners), and the divisions their own sales orders actually
+// sit in -- which is what makes this work for an ordinary account officer who has no SBU
+// row at all.
+//
+// Divisions outside that set are never queried, so the model cannot leak a figure it was
+// merely instructed not to mention. It is told the difference between "no such division"
+// and "not yours to see", so a rep asking about another division gets an honest refusal
+// rather than being told the division does not exist.
+// Only assembled when the question is actually about divisions. The full breakdown is ~500
+// rows (11 divisions x ~45 months) and would otherwise be pasted into the prompt on every
+// unrelated question, crowding out OWN_DATA and costing tokens for nothing.
+//
+// Division names in the data are inconsistently spaced -- "Sales-1" sits beside "Sales - 2"
+// -- so both the mention test here and the matching instruction given to the model strip
+// everything but letters and digits before comparing.
+const normalizeDivision = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const BY_MONTH_CAP = 36;
+
+async function fetchDivisionWeightedSales(user, employeeIds, contextText) {
+  const [divisionRows] = await pool.query('SELECT id, name FROM sales_divisions');
+  const ctx = normalizeDivision(contextText);
+  const mentionsDivision = /division|sbu|weighted/i.test(contextText)
+    || divisionRows.some((d) => d.name && ctx.includes(normalizeDivision(d.name)));
+  if (!mentionsDivision) return null;
+
+  const [[me]] = await pool.query(
+    'SELECT account_type, is_sales_manager FROM users WHERE id = ?', [user.id]
+  );
+  const seesAll = me?.account_type === 'System Admin' || !!me?.is_sales_manager;
+
+  let allowedIds = null; // null means unrestricted
+  if (!seesAll) {
+    const [owned] = await pool.query(
+      'SELECT sales_division_id AS id FROM user_sales_divisions WHERE user_id = ?', [user.id]
+    );
+    const ids = new Set(owned.map((r) => Number(r.id)).filter(Boolean));
+    if (employeeIds.length) {
+      const placeholders = employeeIds.map(() => '?').join(', ');
+      const [fromOwnOrders] = await pool.query(
+        `SELECT DISTINCT so.sales_division_id AS id FROM sales_orders so
+          WHERE so.sales_rep_id IN (${placeholders}) AND so.sales_division_id IS NOT NULL`,
+        employeeIds
+      );
+      for (const r of fromOwnOrders) ids.add(Number(r.id));
+    }
+    allowedIds = [...ids];
+    if (!allowedIds.length) return { access: 'none', divisions: [] };
+  }
+
+  const where = allowedIds
+    ? `WHERE so.date_created IS NOT NULL AND so.sales_division_id IN (${allowedIds.map(() => '?').join(', ')})`
+    : 'WHERE so.date_created IS NOT NULL';
+  const [rows] = await pool.query(
+    `SELECT sd.name AS division, DATE_FORMAT(so.date_created, '%Y-%m') AS month,
+            COUNT(*) AS orders, COALESCE(SUM(so.total_amount), 0) AS amount
+       FROM sales_orders so
+       JOIN sales_divisions sd ON sd.id = so.sales_division_id
+       ${where}
+      GROUP BY sd.name, month
+      ORDER BY sd.name, month DESC`,
+    allowedIds || []
+  );
+
+  const byDivision = new Map();
+  for (const r of rows) {
+    if (!byDivision.has(r.division)) {
+      byDivision.set(r.division, { division: r.division, orders: 0, amount: 0, by_month: [] });
+    }
+    const bucket = byDivision.get(r.division);
+    bucket.orders += Number(r.orders);
+    bucket.amount += Number(r.amount);
+    bucket.by_month.push({ month: r.month, orders: Number(r.orders), amount: Number(r.amount) });
+  }
+  return {
+    access: seesAll ? 'all' : 'own',
+    // `amount`/`orders` are all-time and exact; by_month is trimmed to the most recent
+    // months so an 11-division breakdown stays a sane size in the prompt. Trimming the list
+    // rather than the query is what keeps the all-time total honest.
+    note: `amount and orders are all-time totals; by_month covers the most recent ${BY_MONTH_CAP} months only`,
+    divisions: [...byDivision.values()].map((d) => ({
+      ...d,
+      amount: Number(d.amount.toFixed(2)),
+      by_month: d.by_month.slice(0, BY_MONTH_CAP),
+    })),
+  };
+}
+
 async function fetchOwnScopeSnapshot(user, contextText = '') {
   const scope = await resolveScope(user.id);
   const employeeIds = scope.employeeIds || [];
@@ -399,6 +531,26 @@ async function fetchOwnScopeSnapshot(user, contextText = '') {
       'job_orders jo JOIN sales_orders so ON so.id = jo.sales_order_id', 'jo',
       `so.sales_rep_id IN (${placeholders})`, employeeIds
     );
+
+    // Weighted sales = SUM(sales_orders.total_amount) by the month the order was created,
+    // the same definition the Dashboard's own figure uses (repMetrics in routes/dashboard.js),
+    // so the assistant and the dashboard can never quote different numbers.
+    //
+    // Pre-computed per month rather than left to the model to add up the array above: that
+    // array is capped at the 150 most recent orders, so a question about an older month would
+    // silently under-report, and hand-summing a long list is exactly the failure the
+    // *_count_by_status objects already exist to avoid.
+    const [weightedByMonth] = await pool.query(
+      `SELECT DATE_FORMAT(so.date_created, '%Y-%m') AS month, COUNT(*) AS orders,
+              COALESCE(SUM(so.total_amount), 0) AS amount
+         FROM sales_orders so
+        WHERE so.sales_rep_id IN (${placeholders}) AND so.date_created IS NOT NULL
+        GROUP BY month ORDER BY month DESC LIMIT 36`,
+      employeeIds
+    );
+    snapshot.my_weighted_sales_by_month = weightedByMonth.map((r) => ({
+      month: r.month, orders: Number(r.orders), amount: Number(r.amount),
+    }));
   }
 
   // Sales-rep scope (above) doesn't cover an artist's own assigned work -- job_orders
@@ -440,6 +592,8 @@ async function fetchOwnScopeSnapshot(user, contextText = '') {
   // asking "what department is X in" or "is X still active". No email/phone here
   // since this path, unlike the Employees page itself, has no page-permission gate.
   snapshot.employee_directory = await fetchEmployeeDirectory();
+  const divisionSales = await fetchDivisionWeightedSales(user, employeeIds, contextText);
+  if (divisionSales) snapshot.weighted_sales_by_division = divisionSales;
 
   return snapshot;
 }
@@ -450,15 +604,25 @@ async function answerFromOwnScope(user, question, history = []) {
   const contextText = `${question}\n${historyMessages(history).map((m) => m.content).join('\n')}`;
   const snapshot = await fetchOwnScopeSnapshot(user, contextText);
   const namedMatches = findNameMatches(question, snapshot.employee_directory);
+  // Looking up a document the user names by number is deliberately NOT scoped to what they
+  // own. "What is the status of JO-61829-1" is the same question whoever asks it, and the
+  // answer is already on the Job Orders / NSTDJO pages every one of these users can open --
+  // a Design Supervisor could see the order on screen and not through the assistant, which
+  // read as the assistant being broken. Ownership still governs OWN_DATA below, so "my"
+  // questions and every total stay personal; this only covers documents asked for by name.
+  const referencedOrders = await fetchReferencedOrders(contextText);
+  const hasRefs = Object.keys(referencedOrders).length > 0;
 
   const rawReply = await chatCompletion([
     {
       role: 'system',
       content: `You answer questions about an ERP user's own data. Two sources are available:
 
-1. OWN_DATA below -- this user's own estimates/sales_orders/job_orders/tickets (or their team's, if they're a supervisor), plus a general employee_directory (name/department/position/active-status for any employee, not personal) for looking up ONE specific named person. This is fixed, already-fetched data -- use it directly, don't write SQL for it, and never claim to know anything about these topics beyond what's here. For "how many of my X are status Y" questions, use the matching *_count_by_status object (e.g. estimates_count_by_status) -- it's an exact, pre-computed breakdown, so use it instead of counting the estimates/sales_orders/job_orders/tickets arrays by hand, which you're prone to getting wrong on a long list. Status values there are the real stored values (e.g. 'pending_customer_approval'), not English phrasing -- match the closest one.
+1. OWN_DATA below -- this user's own estimates/sales_orders/job_orders/tickets (or their team's, if they're a supervisor), plus a general employee_directory (name/department/position/active-status for any employee, not personal) for looking up ONE specific named person. This is fixed, already-fetched data -- use it directly, don't write SQL for it, and never claim to know anything about these topics beyond what's here. For "how many of my X are status Y" questions, use the matching *_count_by_status object (e.g. estimates_count_by_status) -- it's an exact, pre-computed breakdown, so use it instead of counting the estimates/sales_orders/job_orders/tickets arrays by hand, which you're prone to getting wrong on a long list. Status values there are the real stored values (e.g. 'pending_customer_approval'), not English phrasing -- match the closest one. For "my weighted sales" in a given month or year, use my_weighted_sales_by_month (months are 'YYYY-MM', amount is the peso total) -- it is exact and complete, whereas the sales_orders array is capped at the 150 most recent and would under-report an older month. Sum the relevant months for a year or a range.
 ${namedMatches.length ? `DIRECTLY_NAMED_EMPLOYEE(S) (extracted from the question -- this is the authoritative, exact data for them within employee_directory, use this over anything else for facts about them):
 ${JSON.stringify(namedMatches)}
+` : ''}${hasRefs ? `REFERENCED_DOCUMENTS (the exact order(s) named in the question, looked up directly -- authoritative, and NOT limited to what this user owns. Use this over OWN_DATA for facts about these documents, and answer from it even when the document is not in OWN_DATA):
+${JSON.stringify(referencedOrders)}
 ` : ''}OWN_DATA:
 ${JSON.stringify(snapshot)}
 
@@ -467,12 +631,20 @@ ${CATALOG_SCHEMA_DESCRIPTION}
 ${FK_NOTE}
 
 Rules:
-- If OWN_DATA (or DIRECTLY_NAMED_EMPLOYEE(S)) answers the question, reply with plain text (one or two sentences, no markdown, no prefix).
-- If the question isn't about this database at all -- general knowledge, unit conversion, plain arithmetic (e.g. "how many sqft is 2x2 ft") -- just answer it directly as plain text. Don't force it into a SQL query it was never asking for.
+- If REFERENCED_DOCUMENTS, OWN_DATA, or DIRECTLY_NAMED_EMPLOYEE(S) answers the question, reply with plain text (one or two sentences, no markdown, no prefix).
+- A question naming a specific document (e.g. "what is the status of JO-1234-1", "who is the artist of NSTDJO-171") is answered from REFERENCED_DOCUMENTS. Do not refuse it or call it unavailable because it is absent from OWN_DATA -- OWN_DATA only lists this user's own recent records, and REFERENCED_DOCUMENTS is the authoritative lookup. If a named document is missing from REFERENCED_DOCUMENTS too, then it genuinely does not exist -- say the number was not found.
+- "My"/"our"/"mine" questions, and every personal count or total, come from OWN_DATA only. Never total up REFERENCED_DOCUMENTS as though it were the user's own book of work.
+- For weighted sales of a named sales division (e.g. "total weighted sales of SALES-1"), use OWN_DATA.weighted_sales_by_division. Match the division name case-insensitively and ignore spacing/hyphens ("SALES-1", "Sales 1" and "sales-1" are the same division). Use its \`amount\` for an all-time total, or its \`by_month\` entries ('YYYY-MM') for a specific month or year. This is a whole-division figure covering every rep in it -- do not confuse it with the user's own my_weighted_sales_by_month.
+- weighted_sales_by_division.access says what this user may see: 'all' = every division; 'own' = only the divisions listed, which are the ones they belong to; 'none' = they are in no division. If they ask about a division that is NOT in the list, say plainly that they do not have access to that division's figures -- do NOT say it doesn't exist, do NOT guess, and do NOT answer with a different division's number. If weighted_sales_by_division is absent entirely, you have no division figures at all -- say so rather than improvising one from the sales_orders array.
+- If the request isn't about this database at all, just answer it directly as plain text. This covers ANYTHING you can answer yourself -- general knowledge, unit conversion, arithmetic (e.g. "how many sqft is 2x2 ft"), checking grammar or spelling, rewriting or shortening a message, translating, drafting wording for a customer, explaining a term. The list is illustrative, not exhaustive: if you can answer it, do. Don't refuse and don't force it into a SQL query it was never asking for.
+- NEVER reply that you only assist with ERP data and SQL queries, or anything to that effect. You are the assistant inside this ERP and you help with whatever the person asks; refusing an ordinary request because it isn't a database question is always wrong.
 - If it needs the catalog schema instead, output ONLY a SQL SELECT statement (no markdown fences, no explanation, no trailing semicolon, no write/DDL keywords, only the tables listed above, include a LIMIT of 20 or fewer unless it's a single aggregate). For name/code lookups use LIKE '%...%' rather than an exact match unless given a full, exact code. For status/priority columns use an EXACT match against a real stored value, not a LIKE against human phrasing. Zero rows back is a fine, honest answer -- prefer writing a best-effort query over refusing.
-- Never write SQL referencing estimates, sales_orders, job_orders, tickets, or users -- those come only from OWN_DATA (users isn't available anywhere).
+- NEVER drop a condition the question asked for. If some part of it cannot be expressed against this schema -- a place, code or field you cannot resolve -- say so in plain text instead of running a query without it. Quietly widening "negative stock in DPOD" into "negative stock anywhere" hands back the wrong rows as though they were the right ones.
+- Never write SQL referencing estimates, sales_orders, job_orders, non_standard_job_orders, tickets, or users -- those come only from OWN_DATA and REFERENCED_DOCUMENTS (users isn't available anywhere).
 - If neither source can answer it, reply in plain text saying so.
-- This is a running conversation -- use the earlier messages to resolve follow-up questions ("his", "that order", "and last month?"). Keep plain-text answers warm and conversational, like a helpful colleague.`,
+- This is a running conversation -- use the earlier messages to resolve follow-up questions ("his", "that order", "and last month?"). Keep plain-text answers warm and conversational, like a helpful colleague.
+- LANGUAGE. This company is in Cebu. People here write in English, Cebuano/Bisaya, Tagalog, or a mix of them in one sentence, and they will not switch to English for your benefit. Understand all of it and REPLY IN THE LANGUAGE THEY USED. "Pila ka estimates nako karon?" is "how many estimates do I have today". "Asa" = where, "unsa" = what, "pila" = how much/how many, "kinsa" = who, "kanus-a" = when, "salamat" = thanks, "uy" is a friendly particle carrying no meaning of its own.
+- Casual remarks, jokes and complaints in any of those languages are conversation, not failed queries. Answer them like a colleague would -- briefly, in kind. NEVER reply that you do not understand simply because a message is not in English or is not about data; "laaya uy" ("feeling drained, huh") deserves a human reply, not an apology.`,
     },
     ...historyMessages(history),
     { role: 'user', content: question },

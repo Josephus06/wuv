@@ -1,8 +1,11 @@
 const express = require('express');
 const pool = require('../db');
+const { assignDocNo } = require('../lib/docNumber');
 const { requireAuth, requirePermission } = require('../middleware/auth');
 const { isNonStockItem } = require('../lib/itemTypes');
 const { assertPeriodOpen } = require('../lib/accountingPeriod');
+const { deriveOnHand } = require('../lib/stockLedger');
+const { headerDepartmentError } = require('../lib/requireDepartment');
 
 const router = express.Router();
 // Office Supply Requisition (OSR-####): a transfer-order-like withdrawal restricted to items flagged
@@ -41,11 +44,28 @@ router.get('/meta', requireAuth, requirePermission(ROUTE, 'can_view'), async (re
        WHERE i.is_office_supply = 1 ORDER BY i.display_name`
     );
     const [locations] = await pool.query('SELECT id, location_name FROM locations ORDER BY location_name');
-    const [employees] = await pool.query("SELECT id, CONCAT(first_name, ' ', last_name) AS name FROM employees WHERE is_active = TRUE ORDER BY first_name, last_name");
+    // department_id rides along so the form can default Department from the Requestor.
+    const [employees] = await pool.query("SELECT id, CONCAT(first_name, ' ', last_name) AS name, department_id FROM employees WHERE is_active = TRUE ORDER BY first_name, last_name");
     const [departments] = await pool.query('SELECT id, name FROM departments WHERE is_active = TRUE ORDER BY name');
-    // Requestor defaults to the logged-in user's own employee.
-    const [[me]] = await pool.query('SELECT employee_id FROM users WHERE id = ?', [req.user.id]);
-    res.json({ items, locations, employees, departments, defaults: { requestor_id: me?.employee_id || null } });
+    // Requestor defaults to the logged-in user's own employee, Department to that employee's.
+    const [[me]] = await pool.query(
+      'SELECT u.employee_id, e.department_id FROM users u LEFT JOIN employees e ON e.id = u.employee_id WHERE u.id = ?',
+      [req.user.id]
+    );
+    // Office supplies are issued from Warehouse - Central, so a new requisition withdraws from it
+    // unless changed, and the item picker shows what Warehouse - Central holds of each item.
+    // Matched by name (ids differ between installs); prefix-matched as the importers do.
+    const [[central]] = await pool.query("SELECT id FROM locations WHERE location_name LIKE 'Warehouse - Central%' ORDER BY id LIMIT 1");
+    if (central && items.length) {
+      // From the stock ledger, not inventory_locations: that snapshot holds nothing for office
+      // supplies at Warehouse - Central on production, where the ledger shows 287 items in stock.
+      const onHand = await deriveOnHand(pool, items.map((i) => i.id));
+      for (const i of items) i.central_on_hand = Number((onHand.get(`${i.id}|${central.id}`) || 0).toFixed(4));
+    }
+    res.json({
+      items, locations, employees, departments,
+      defaults: { requestor_id: me?.employee_id || null, department_id: me?.department_id || null, withdraw_from_location_id: central?.id || null },
+    });
   } catch (err) { next(err); }
 });
 
@@ -54,8 +74,10 @@ router.get('/on-hand', requireAuth, requirePermission(ROUTE, 'can_view'), async 
   try {
     const { item_id: itemId, location_id: locationId } = req.query;
     if (!itemId || !locationId) return res.json({ qty_on_hand: 0 });
-    const [[row]] = await pool.query('SELECT qty_on_hand FROM inventory_locations WHERE inventory_id = ? AND location_id = ?', [itemId, locationId]);
-    res.json({ qty_on_hand: Number(row?.qty_on_hand || 0) });
+    // The stock ledger's balance -- the same figure the item picker, the Bin Card and the Inventory
+    // Item page show -- rather than the inventory_locations snapshot, which is empty for these.
+    const onHand = await deriveOnHand(pool, [Number(itemId)]);
+    res.json({ qty_on_hand: Number((onHand.get(`${itemId}|${locationId}`) || 0).toFixed(4)) });
   } catch (err) { next(err); }
 });
 
@@ -66,13 +88,21 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
     const params = [];
     if (status) { where.push('o.status = ?'); params.push(status); }
     if (asOf) { where.push('o.date_created <= ?'); params.push(asOf); }
-    if (search) { where.push('(o.osr_no LIKE ? OR o.memo LIKE ? OR loc.location_name LIKE ?)'); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+    if (search) {
+      where.push('(o.osr_no LIKE ? OR o.memo LIKE ? OR loc.location_name LIKE ? OR tloc.location_name LIKE ?)');
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+    }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    // Transfer To is the receiving department, as the source's OSR list shows it. (Requisitions
+    // saved before Department became required on the form have no department_id, so the list
+    // does not lean on it.)
     const [rows] = await pool.query(
       `SELECT o.id, o.osr_no, o.date_created, o.date_needed, o.status, o.memo,
-              loc.location_name, CONCAT(e.first_name, ' ', e.last_name) AS requestor_name, d.name AS department_name
+              loc.location_name, tloc.location_name AS transfer_to_location_name,
+              CONCAT(e.first_name, ' ', e.last_name) AS requestor_name, d.name AS department_name
        FROM office_supply_requisitions o
        LEFT JOIN locations loc ON loc.id = o.location_id
+       LEFT JOIN locations tloc ON tloc.id = o.transfer_to_location_id
        LEFT JOIN employees e ON e.id = o.requestor_id
        LEFT JOIN departments d ON d.id = o.department_id
        ${whereSql} ORDER BY o.id DESC`,
@@ -82,15 +112,27 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
   } catch (err) { next(err); }
 });
 
+// On hand at the Withdraw From warehouse, from the stock ledger -- the figure the form's picker,
+// the Bin Card and the item page show. It read the inventory_locations snapshot, which holds
+// nothing for office supplies, so every line showed a blank Qty on Hand.
+async function onHandAt(db, itemIds, locationId) {
+  const out = new Map();
+  if (!locationId || !itemIds.length) return out;
+  const byPair = await deriveOnHand(db, itemIds);
+  for (const id of itemIds) out.set(Number(id), Number((byPair.get(`${id}|${locationId}`) || 0).toFixed(4)));
+  return out;
+}
+
 async function loadLines(osrId, locationId) {
   const [lines] = await pool.query(
-    `SELECT l.*, i.item_code, i.display_name AS item_name, i.item_type,
-            (SELECT qty_on_hand FROM inventory_locations il WHERE il.inventory_id = l.item_id AND il.location_id = ?) AS on_hand
+    `SELECT l.*, i.item_code, i.display_name AS item_name, i.item_type
      FROM office_supply_requisition_lines l
      LEFT JOIN inventories i ON i.id = l.item_id
      WHERE l.osr_id = ? ORDER BY l.line_no`,
-    [locationId || null, osrId]
+    [osrId]
   );
+  const onHand = await onHandAt(pool, lines.filter((l) => l.item_id && !isNonStockItem(l.item_type)).map((l) => l.item_id), locationId);
+  for (const l of lines) l.on_hand = onHand.has(Number(l.item_id)) ? onHand.get(Number(l.item_id)) : null;
   return lines;
 }
 
@@ -158,6 +200,8 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
   try {
     const { date_created: dateCreated, date_needed: dateNeeded, location_id: locationId, transfer_to_location_id: transferToId, requestor_id: requestorId, department_id: departmentId, memo, lines } = req.body;
     if (!(await assertOfficeSupplyItems(conn, lines || []))) return res.status(400).json({ error: 'Only office-supply items can be requisitioned here.' });
+    const deptError = headerDepartmentError(departmentId);
+    if (deptError) return res.status(400).json({ error: deptError });
     await assertPeriodOpen(dateCreated, 'non_gl', conn);
     await conn.beginTransaction();
     const [r] = await conn.query(
@@ -166,8 +210,7 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
       [dateCreated || new Date().toISOString().slice(0, 10), dateNeeded || null, locationId || null, transferToId || null, requestorId || null, departmentId || null, trunc(memo, 1000), req.user.id]
     );
     const osrId = r.insertId;
-    const osrNo = `OSR-${osrId}`;
-    await conn.query('UPDATE office_supply_requisitions SET osr_no = ? WHERE id = ?', [osrNo, osrId]);
+    const osrNo = await assignDocNo(conn, { table: 'office_supply_requisitions', column: 'osr_no', prefix: 'OSR-', id: osrId });
     await writeLines(conn, osrId, lines);
     await logAudit(conn, { osrId, userId: req.user.id, eventType: 'Created', fieldName: 'osr_no', newValue: osrNo });
     await conn.commit();
@@ -183,6 +226,8 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
     if (o.status === 'served' || o.status === 'cancelled') return res.status(409).json({ error: 'This requisition can no longer be edited.' });
     const { date_created: dateCreated, date_needed: dateNeeded, location_id: locationId, transfer_to_location_id: transferToId, requestor_id: requestorId, department_id: departmentId, memo, lines } = req.body;
     if (!(await assertOfficeSupplyItems(conn, lines || []))) return res.status(400).json({ error: 'Only office-supply items can be requisitioned here.' });
+    const deptError = headerDepartmentError(departmentId);
+    if (deptError) return res.status(400).json({ error: deptError });
     await assertPeriodOpen([o.date_created, dateCreated], 'non_gl', conn);
     await conn.beginTransaction();
     await conn.query(
@@ -217,6 +262,9 @@ router.post('/:id/fulfill', requireAuth, requirePermission(ROUTE, 'can_approve')
       [req.params.id]
     );
     const byId = new Map(lines.map((l) => [l.id, l]));
+    // Checked against the stock ledger, the same Qty on Hand the screen shows. It read the empty
+    // inventory_locations snapshot, so every fulfillment was refused as exceeding 0 on hand.
+    const onHand = await onHandAt(conn, lines.filter((l) => l.item_id && !isNonStockItem(l.item_type)).map((l) => l.item_id), o.location_id);
 
     for (const s of submitted) {
       const line = byId.get(Number(s.line_id));
@@ -225,8 +273,7 @@ router.post('/:id/fulfill', requireAuth, requirePermission(ROUTE, 'can_approve')
       const serve = num(s.qty_to_serve);
       if (serve > remaining) return res.status(409).json({ error: `Qty to Serve for ${line.item_code} exceeds the remaining balance (${remaining}).` });
       if (isNonStockItem(line.item_type)) continue;
-      const [[stock]] = await conn.query('SELECT qty_on_hand FROM inventory_locations WHERE inventory_id = ? AND location_id = ?', [line.item_id, o.location_id]);
-      const available = num(stock?.qty_on_hand);
+      const available = num(onHand.get(Number(line.item_id)));
       if (serve > available) return res.status(409).json({ error: `Qty to Serve for ${line.item_code} exceeds what's on hand at this location (${available}).` });
     }
 
@@ -239,8 +286,7 @@ router.post('/:id/fulfill', requireAuth, requirePermission(ROUTE, 'can_approve')
       [o.id, req.body.date_created || new Date().toISOString().slice(0, 10), o.location_id, o.transfer_to_location_id, o.requestor_id, trunc(req.body.memo || o.memo, 1000), req.user.id]
     );
     const osrfId = fr.insertId;
-    const osrfNo = `OSRF-${osrfId}`;
-    await conn.query('UPDATE osr_fulfillments SET osrf_no = ? WHERE id = ?', [osrfNo, osrfId]);
+    const osrfNo = await assignDocNo(conn, { table: 'osr_fulfillments', column: 'osrf_no', prefix: 'OSRF-', id: osrfId });
 
     let totalAmount = 0;
     for (const s of submitted) {
@@ -315,12 +361,14 @@ router.get('/fulfillments/:id', requireAuth, requirePermission(ROUTE, 'can_view'
     );
     if (!f) return res.status(404).json({ error: 'Not found' });
     const [lines] = await pool.query(
-      `SELECT fl.*, i.item_code, i.display_name AS item_name,
-              (SELECT qty_on_hand FROM inventory_locations il WHERE il.inventory_id = fl.item_id AND il.location_id = ?) AS on_hand
+      `SELECT fl.*, i.item_code, i.display_name AS item_name, i.item_type
        FROM osr_fulfillment_lines fl LEFT JOIN inventories i ON i.id = fl.item_id
        WHERE fl.osrf_id = ? ORDER BY fl.id`,
-      [f.transfer_to_location_id || f.withdraw_from_location_id || null, req.params.id]
+      [req.params.id]
     );
+    const onHand = await onHandAt(pool, lines.filter((l) => l.item_id && !isNonStockItem(l.item_type)).map((l) => l.item_id),
+      f.transfer_to_location_id || f.withdraw_from_location_id);
+    for (const l of lines) l.on_hand = onHand.has(Number(l.item_id)) ? onHand.get(Number(l.item_id)) : null;
     // GL Impact: DR 30504 Materials, Tools & Supplies / CR 15400 Supplies Inventory for the total value.
     const [[dr]] = await pool.query("SELECT account_code, account_name FROM chart_of_accounts WHERE account_code = '30504'");
     const [[cr]] = await pool.query("SELECT account_code, account_name FROM chart_of_accounts WHERE account_code = '15400'");

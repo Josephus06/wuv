@@ -8,6 +8,22 @@ const router = express.Router();
 const ROUTE = '/manage-accounting-period';
 const FLAGS = ['close_ar', 'close_ap', 'close_other_gl', 'close_non_gl', 'close_all'];
 
+// The closed months, for every signed-in user (2026-10-12): each transaction screen reads this to
+// hide Edit / Void / Cancel on a document dated in a month closed for its category -- the server's
+// assertPeriodOpen refuses the change anyway; this only stops offering a button that cannot work.
+router.get('/locks', requireAuth, async (req, res, next) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT fiscal_year, period_month, close_all, close_ar, close_ap, close_other_gl, close_non_gl
+         FROM accounting_periods
+        WHERE close_all OR close_ar OR close_ap OR close_other_gl OR close_non_gl`);
+    res.json(rows.map((r) => ({
+      month: `${r.fiscal_year}-${String(r.period_month).padStart(2, '0')}`,
+      all: !!r.close_all, ar: !!r.close_ar, ap: !!r.close_ap, other_gl: !!r.close_other_gl, non_gl: !!r.close_non_gl,
+    })));
+  } catch (err) { next(err); }
+});
+
 router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
   try {
     const [rows] = await pool.query('SELECT * FROM accounting_periods ORDER BY fiscal_year DESC, period_month ASC');

@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate, displayAuditTime } from '../utils/dates';
+import { CustomerLink } from '../components/PartyLink';
 
 const STATUS_LABELS = { pending_approval: 'Pending', approved: 'Approved', voided: 'Voided' };
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : ''; }
+function formatDate(v) { return v ? displayDate(v) : ''; }
 function coverageDate(l) {
   const f = formatDate(l.warranty_date_from); const t = formatDate(l.warranty_date_to);
   return f && t ? `${f} to ${t}` : (f || t || '');
@@ -36,19 +38,24 @@ export default function WarrantyCertificateView() {
   const isApproved = wc.status === 'approved';
   const isVoided = wc.status === 'voided';
   // Group lines by coverage type (each coverage becomes a section header on the certificate).
-  const groups = lines.reduce((acc, l) => { const k = l.coverage || '—'; (acc[k] = acc[k] || []).push(l); return acc; }, {});
+  const groups = lines.reduce((acc, l) => {
+    // A line may carry several coverages ("Structural, Electrical"); it is listed under each.
+    const keys = String(l.coverage || '').split(',').map((x) => x.trim()).filter(Boolean);
+    for (const k of keys.length ? keys : ['—']) (acc[k] = acc[k] || []).push(l);
+    return acc;
+  }, {});
 
   return (
     <div>
       <div className="page-header">
         <div style={{ fontWeight: 600 }}>WARRANTY CERTIFICATE <span className="muted">{STATUS_LABELS[wc.status] || wc.status}</span></div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate('/warranty-certificates')}>Back</button>
-          {can('/warranty-certificates', 'can_edit') && !isVoided && !isApproved && <button className="btn btn-sm btn-primary" onClick={() => navigate(`/warranty-certificates/${id}/edit`)}>Edit</button>}
+          <Link className="btn btn-sm" to={'/warranty-certificates'}>Back</Link>
+          {can('/warranty-certificates', 'can_edit') && !isVoided && !isApproved && <Link className="btn btn-sm btn-primary" to={`/warranty-certificates/${id}/edit`}>Edit</Link>}
           {can('/warranty-certificates', 'can_approve') && wc.status === 'pending_approval' && <button className="btn btn-sm btn-primary" disabled={busy} onClick={handleApprove}>Approve</button>}
           {/* Print is only available once the certificate has been approved. */}
           {isApproved && <button className="btn btn-sm btn-primary" onClick={() => window.open(`/warranty-certificates/${id}/print`, '_blank')}>Print</button>}
-          {can('/warranty-certificates', 'can_edit') && !isVoided && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
+          {can('/warranty-certificates', 'can_void') && !isVoided && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
         </div>
       </div>
 
@@ -65,7 +72,7 @@ export default function WarrantyCertificateView() {
 
           <div className="section-band">Customer Information</div>
           <div style={{ lineHeight: 2, padding: '8px 0' }}>
-            <div>Customer : <span className="hi">{wc.customer_name}</span></div>
+            <div>Customer : <span className="hi"><CustomerLink id={wc.customer_id} name={wc.customer_name} /></span></div>
             <div>Contact Person : <span className="hi">{wc.contact_name}</span></div>
             <div>Contact Number : <span className="hi">{wc.contact_number}</span></div>
             <div>Address : <span className="hi">{wc.address}</span></div>
@@ -105,7 +112,7 @@ export default function WarrantyCertificateView() {
         <div className="card">
           <DataTable
             columns={[
-              { key: 'set_at', label: 'When', render: (r) => new Date(r.set_at).toLocaleString() },
+              { key: 'set_at', label: 'When', render: (r) => displayAuditTime(r.set_at) },
               { key: 'set_by_name', label: 'Set By' }, { key: 'event_type', label: 'Type' },
               { key: 'field_name', label: 'Field' }, { key: 'old_value', label: 'Old Value' }, { key: 'new_value', label: 'New Value' },
             ]}

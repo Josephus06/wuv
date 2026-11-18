@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import DataTable from '../components/DataTable';
 import EntityPicker from '../components/EntityPicker';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { isBaseUnit } from '../utils/unitUsed';
+import { displayMonth } from '../utils/dates';
+import { lineDepartmentError } from '../utils/requireDepartment';
 
 // Mirrors the real system's "Inventory Adjustments" Add/Edit form: the Adjustments
 // section (Add Material / Upload Material) appears as soon as an Adjustment Account is
@@ -65,21 +68,27 @@ export default function InventoryAdjustmentEdit() {
   }, [id, isNew]);
 
   const postingPeriod = form.date_created
-    ? new Date(form.date_created).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+    ? displayMonth(form.date_created)
     : '';
 
   async function handleSave() {
-    setSaving(true);
     setError('');
+    // Every line needs a Department; the server refuses the Save (and Approve) otherwise.
+    const deptError = lineDepartmentError(lines);
+    if (deptError) { setError(deptError); return; }
+    setSaving(true);
     try {
+      // Save lands on the adjustment's own view, the way Transfer Order, Journal, Deposit and
+      // Purchase Requisition all do. This form used to stay in the editor -- a new adjustment
+      // went to its own /edit and an existing one just reloaded in place -- so the only sign a
+      // save had worked was the spinner stopping, and approving it meant navigating there by
+      // hand. Lines are posted as they are added, so there is nothing unsaved to lose.
       if (isNew) {
         const { data } = await api.post('/inventory-adjustments', form);
-        navigate(`/inventory-adjustments/${data.id}/edit`);
+        navigate(`/inventory-adjustments/${data.id}`);
       } else {
         await api.put(`/inventory-adjustments/${id}`, form);
-        const { data } = await api.get(`/inventory-adjustments/${id}`);
-        setAdjustment(data);
-        setLines(data.lines || []);
+        navigate(`/inventory-adjustments/${id}`);
       }
     } catch (err) {
       setError(err.response?.data?.error || 'Save failed');
@@ -145,7 +154,7 @@ export default function InventoryAdjustmentEdit() {
       <div className="page-header">
         <h1>{isNew ? 'Add Inventory Adjustment' : `Inventory Adjustment — ${adjustment?.adjustment_no}`}</h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn" onClick={() => navigate(isNew ? '/inventory-adjustments' : `/inventory-adjustments/${id}`)}>Back to Lists</button>
+          <Link className="btn" to={isNew ? '/inventory-adjustments' : `/inventory-adjustments/${id}`}>Back to Lists</Link>
           <button className="btn btn-primary" disabled={saving} onClick={handleSave}>{saving ? <LoadingSpinner inline size="sm" label="Saving..." /> : 'Save'}</button>
         </div>
       </div>
@@ -198,12 +207,15 @@ export default function InventoryAdjustmentEdit() {
                     columns={[{ key: 'location_name', label: 'Name' }, { key: 'location_code', label: 'Code' }]}
                     searchKeys={['location_name', 'location_code']}
                     placeholder="Select Location"
+                    // An approved line's stock has already landed there: to move it, delete the line
+                    // and add it again (the server refuses the change too).
+                    disabled={adjustment?.status === 'approved' && !!l.location_id}
                     onSelect={(loc) => commitLine(l.id, { location_id: loc.id })}
                   />
                 ),
               },
               {
-                key: 'department_name', label: 'Department',
+                key: 'department_name', label: 'Department *',
                 render: (l) => (
                   <EntityPicker
                     label="Department" items={departments} value={l.department_id} getLabel={(d) => d.name}
@@ -217,7 +229,10 @@ export default function InventoryAdjustmentEdit() {
               {
                 key: 'unit_used', label: 'Unit Used',
                 render: (l) => (
-                  <select defaultValue={l.unit_used || 'stock'} onChange={(e) => commitLine(l.id, { unit_used: e.target.value })}>
+                  // Normalised, because a migrated line stores 'StockUnit'/'BaseUnit' and neither
+                  // matches an option value -- so a base-unit adjustment opened here showed
+                  // "Stock Unit", and saving any other field would have committed that back.
+                  <select defaultValue={isBaseUnit(l.unit_used) ? 'base' : 'stock'} onChange={(e) => commitLine(l.id, { unit_used: e.target.value })}>
                     <option value="stock">Stock Unit</option>
                     <option value="base">Base Unit</option>
                   </select>

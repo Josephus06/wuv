@@ -1,10 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../api/client';
 import EntityPicker from '../components/EntityPicker';
 import LoadingSpinner from '../components/LoadingSpinner';
+import Pagination from '../components/Pagination';
+import { displayDate } from '../utils/dates';
+import { downloadFile } from '../utils/downloadFile';
+import useAutoSearch from '../utils/useAutoSearch';
+import SearchInput from '../components/SearchInput';
 
-function formatDate(v) { return v ? String(v).slice(0, 10) : ''; }
+function formatDate(v) { return v ? displayDate(String(v).slice(0, 10)) : ''; }
 function locationLabel(l) { return l ? l.location_name : ''; }
 function employeeLabel(e) { return e ? `${e.first_name} ${e.last_name}` : ''; }
 
@@ -17,12 +22,18 @@ function employeeLabel(e) { return e ? `${e.first_name} ${e.last_name}` : ''; }
 export default function ItemFulfillments() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const limit = 10;
 
   const [search, setSearch] = useState('');
   const [withdrawFrom, setWithdrawFrom] = useState(null);
   const [transferTo, setTransferTo] = useState(null);
   const [requestor, setRequestor] = useState(null);
   const [asOf, setAsOf] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [extracting, setExtracting] = useState(false);
 
   const [locations, setLocations] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -34,17 +45,52 @@ export default function ItemFulfillments() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function load() {
-    setLoading(true);
+  // Re-fetch when the page changes. runSearch resets to page 1, which fires this too --
+  // guarded there so a search from page 1 still reloads.
+  const firstRender = useRef(true);
+  useEffect(() => {
+    if (firstRender.current) { firstRender.current = false; return; }
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
+
+  function runSearch() {
+    if (page === 1) load(); else setPage(1);
+  }
+  useAutoSearch(search, runSearch);
+
+  // The filters as the server takes them -- shared by the list and the Extract.
+  function filterParams() {
     const params = {};
     if (search) params.search = search;
     if (withdrawFrom) params.withdraw_from = withdrawFrom.id;
     if (transferTo) params.transfer_to = transferTo.id;
     if (requestor) params.requestor_id = requestor.id;
     if (asOf) params.as_of = asOf;
+    if (dateFrom) params.date_from = dateFrom;
+    if (dateTo) params.date_to = dateTo;
+    return params;
+  }
+
+  async function load() {
+    setLoading(true);
+    const params = { page, limit, ...filterParams() };
     const { data } = await api.get('/transfer-orders/item-fulfillments', { params });
-    setRows(data);
+    setRows(data.rows);
+    setTotal(data.total);
     setLoading(false);
+  }
+
+  // Extract: every row under the current filters (not just this page) as an Excel workbook.
+  async function extract() {
+    setExtracting(true);
+    try {
+      await downloadFile('/transfer-orders/item-fulfillments', { ...filterParams(), format: 'xlsx' }, `item-fulfillments-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch {
+      alert('Extract failed. Please try again.');
+    } finally {
+      setExtracting(false);
+    }
   }
 
   return (
@@ -53,13 +99,14 @@ export default function ItemFulfillments() {
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 16 }}>
           <h1 style={{ fontSize: 16, textTransform: 'uppercase', margin: 0 }}>Saved Item Fulfillments</h1>
         </div>
+        <button type="button" className="btn" onClick={extract} disabled={extracting}>{extracting ? 'Extracting...' : 'Extract'}</button>
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} placeholder="IF No. or TO No..." />
+            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="IF No., TO No., JO No. or item..." />
           </div>
           <div className="field">
             <label>Withdraw From</label>
@@ -104,8 +151,16 @@ export default function ItemFulfillments() {
             <label>Date (As of)</label>
             <input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} />
           </div>
+          <div className="field">
+            <label>Date From</label>
+            <input type="date" value={dateFrom} max={dateTo || undefined} onChange={(e) => setDateFrom(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Date To</label>
+            <input type="date" value={dateTo} min={dateFrom || undefined} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
         </div>
-        <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={load}>Search</button>
+        <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={runSearch}>Search</button>
       </div>
 
       <div className="card">
@@ -114,37 +169,54 @@ export default function ItemFulfillments() {
             <table className="responsive-cards">
               <thead>
                 <tr>
-                  <th>Item Fulfillment #</th>
-                  <th>Date Created</th>
-                  <th>TO No.</th>
-                  <th>Withdraw From</th>
-                  <th>Transfer To</th>
-                  <th>Requestor</th>
-                  <th>Status</th>
+                  <th>IF #</th>
+                  <th>IF Date</th>
+                  <th>TO #</th>
+                  <th>TO Date</th>
+                  <th>JO #</th>
                   <th>Memo</th>
+                  <th>Item</th>
+                  <th>Description</th>
+                  <th style={{ textAlign: 'right' }}>Qty</th>
+                  <th>Units</th>
+                  <th>From Location</th>
+                  <th>To Location</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 && (
-                  <tr><td colSpan={9} className="muted" style={{ textAlign: 'center', padding: 20 }}>No item fulfillments found.</td></tr>
+                  <tr><td colSpan={13} className="muted" style={{ textAlign: 'center', padding: 20 }}>No item fulfillments found.</td></tr>
                 )}
                 {rows.map((row) => (
-                  <tr key={row.id}>
-                    <td data-label="Item Fulfillment #">{row.fulfillment_no}</td>
-                    <td data-label="Date Created">{formatDate(row.date_created)}</td>
-                    <td data-label="TO No.">{row.to_no}</td>
-                    <td data-label="Withdraw From">{row.withdraw_from_name}</td>
-                    <td data-label="Transfer To">{row.transfer_to_name}</td>
-                    <td data-label="Requestor">{row.requestor_name || '—'}</td>
-                    <td data-label="Status">{row.status}</td>
+                  // One row per item fulfilled, the same columns as Saved Item Receipts (asked 2026-11-11).
+                  <tr key={row.line_id}>
+                    <td data-label="IF #">{row.fulfillment_no}</td>
+                    <td data-label="IF Date">{formatDate(row.date_created)}</td>
+                    <td data-label="TO #">{row.to_no}</td>
+                    <td data-label="TO Date">{formatDate(row.to_date)}</td>
+                    <td data-label="JO #">{row.job_order_no || '—'}</td>
                     <td data-label="Memo">{row.memo}</td>
+                    <td data-label="Item">{row.item_code}</td>
+                    <td data-label="Description">{row.item_name}</td>
+                    <td data-label="Qty" style={{ textAlign: 'right' }}>{row.qty_fulfilled == null ? '' : Number(row.qty_fulfilled).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
+                    <td data-label="Units">{row.units}</td>
+                    <td data-label="From Location">{row.withdraw_from_name}</td>
+                    <td data-label="To Location">{row.transfer_to_name}</td>
                     <td><Link className="btn btn-sm btn-primary" to={`/transfer-orders/item-fulfillments/${row.id}`}>View</Link></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+        )}
+        {!loading && (
+          <>
+            <div className="muted" style={{ marginTop: 12 }}>
+              {total.toLocaleString()} item{total === 1 ? '' : 's'} fulfilled
+            </div>
+            <Pagination page={page} totalPages={Math.max(1, Math.ceil(total / limit))} onChange={setPage} />
+          </>
         )}
       </div>
     </div>

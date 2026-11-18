@@ -4,6 +4,7 @@ import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayAuditTime } from '../utils/dates';
 
 // Mirrors the real system's "Accounting > Chart of Account Types" screen: the real
 // (Account Type, Account Sub-Type) pairing with its Normal Balance -- fully migrated
@@ -144,7 +145,7 @@ export default function ChartOfAccountTypes() {
               <h3>System Information</h3>
               <DataTable
                 columns={[
-                  { key: 'set_at', label: 'Date Time', render: (r) => new Date(r.set_at).toLocaleString() },
+                  { key: 'set_at', label: 'Date Time', render: (r) => displayAuditTime(r.set_at) },
                   { key: 'set_by_name', label: 'Set By' },
                   { key: 'event_type', label: 'Type' },
                   { key: 'field_name', label: 'Field' },

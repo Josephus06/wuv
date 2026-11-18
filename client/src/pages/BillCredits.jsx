@@ -3,15 +3,20 @@ import { Link } from 'react-router-dom';
 import api from '../api/client';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { SupplierLink } from '../components/PartyLink';
+import { displayDate } from '../utils/dates';
+import useAutoSearch from '../utils/useAutoSearch';
+import SearchInput from '../components/SearchInput';
 
 const PAGE_SIZE = 10;
-const STATUS_LABELS = { open: 'Open', voided: 'Voided' };
+// fully_applied: migrated from the source with its own status (import-bill-credits.js).
+const STATUS_LABELS = { open: 'Open', fully_applied: 'Fully Applied', voided: 'Voided' };
 
 function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? String(v).slice(0, 10) : ''; }
+function formatDate(v) { return v ? displayDate(String(v).slice(0, 10)) : ''; }
 
 export default function BillCredits() {
 
@@ -37,6 +42,7 @@ export default function BillCredits() {
     setPage(1);
     load();
   }
+  useAutoSearch(search, runSearch);
 
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -51,13 +57,14 @@ export default function BillCredits() {
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Credit # or Vendor..." />
+            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Credit # or Vendor..." />
           </div>
           <div className="field">
             <label>Status</label>
             <select value={status} onChange={(e) => setStatus(e.target.value)}>
               <option value="">--ALL--</option>
               <option value="open">Open</option>
+              <option value="fully_applied">Fully Applied</option>
               <option value="voided">Voided</option>
             </select>
           </div>
@@ -83,7 +90,7 @@ export default function BillCredits() {
                     <td data-label="Credit #">{row.bill_credit_no}</td>
                     <td data-label="Created From">{row.bill_no}</td>
                     <td data-label="Date Created">{formatDate(row.date_created)}</td>
-                    <td data-label="Vendor">{row.supplier_name}</td>
+                    <td data-label="Vendor"><SupplierLink id={row.supplier_id} name={row.supplier_name} /></td>
                     <td data-label="Total Amount">{money(row.total_amount)}</td>
                     <td data-label="Applied Amount">{money(row.applied_amount)}</td>
                     <td data-label="Status">{STATUS_LABELS[row.status] || row.status}</td>

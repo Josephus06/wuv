@@ -1,8 +1,11 @@
 import { Fragment, useState } from 'react';
 import api from '../../api/client';
+import CompanyBranchFilter, { toParams, ScopeNote } from '../../components/CompanyBranchFilter';
 import LoadingSpinner from '../../components/LoadingSpinner';
+import { REPORT_TIMING } from '../../utils/reportTiming';
 import MonthYearPicker from '../../components/MonthYearPicker';
 import CoaTreeRows, { money } from './CoaTreeRows';
+import AccountTransactionsModal from './AccountTransactionsModal';
 
 // The balance sheet is "as of" the last day of the selected month.
 function endOfMonth({ year, month }) {
@@ -20,20 +23,47 @@ export default function BalanceSheet() {
   const now = new Date();
   const [monthYear, setMonthYear] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
   const [report, setReport] = useState(null);
+  // Company / branch (CompanyBranchFilter): blank is every company -- the consolidated view.
+  const [scope, setScope] = useState({ companyId: '', locationId: '' });
+  // The scope the sheet on screen was generated for -- what Export and the drill-down use.
+  const [ranScope, setRanScope] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [exporting, setExporting] = useState(false);
+  // The account whose amount was clicked -- its transactions open in a popup, as on the source.
+  const [drill, setDrill] = useState(null);
 
   async function generate() {
     if (!monthYear) { setError('Select a month first.'); return; }
     setLoading(true);
     setError('');
     try {
-      const { data } = await api.get('/reports/balance-sheet', { params: { asOf: endOfMonth(monthYear) } });
+      const { data } = await api.get('/reports/balance-sheet', { params: { asOf: endOfMonth(monthYear), ...toParams(scope) } });
       setReport(data);
+      setRanScope(toParams(scope));
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to generate report');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function exportExcel() {
+    if (!report) return;
+    setExporting(true);
+    setError('');
+    try {
+      const res = await api.get('/reports/balance-sheet/export', { params: { asOf: report.as_of, ...ranScope }, responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `balance-sheet-${report.as_of}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      setError('Failed to export the balance sheet');
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -49,23 +79,32 @@ export default function BalanceSheet() {
             <label>Date as of:</label>
             <MonthYearPicker value={monthYear} onChange={setMonthYear} />
           </div>
+          <CompanyBranchFilter value={scope} onChange={setScope} />
         </div>
-        <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={generate} disabled={loading}>
-          {loading ? 'Generating...' : 'Generate'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button className="btn btn-primary" onClick={generate} disabled={loading}>
+            {loading ? 'Generating...' : 'Generate'}
+          </button>
+          {/* Exports the sheet shown -- the as-of date it was generated for, not whatever the picker
+              has been changed to since. */}
+          <button className="btn" onClick={exportExcel} disabled={loading || exporting || !report}>
+            {exporting ? 'Exporting...' : 'Export to Excel'}
+          </button>
+        </div>
       </div>
 
       {error && <div className="card" style={{ color: '#b91c1c', marginBottom: 16 }}>{error}</div>}
 
-      {loading && <LoadingSpinner />}
+      {loading && <LoadingSpinner label="Generating..." expectedMs={REPORT_TIMING.balanceSheet} />}
 
       {!loading && report && (
         <div className="card">
+          <ScopeNote scope={report.scope} />
           <div style={{ marginBottom: 12, display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
-            <strong>As of {report.as_of}</strong>
+            <strong>As of {report.as_of}{report.scope ? ` — ${report.scope.label}` : ''}</strong>
             <span>Total Assets: {money(report.asset_total)}</span>
             <span>Total Liabilities &amp; Equity: {money(report.liability_equity_total)}</span>
-            <span>Current Earnings (Unclosed): {money(report.current_earnings)}</span>
+            <span>Current Year Earnings: {money(report.current_earnings)}</span>
             <span style={{ color: report.balanced ? '#15803d' : '#b91c1c', fontWeight: 600 }}>
               {report.balanced ? 'Balanced' : 'Out of Balance'}
             </span>
@@ -95,7 +134,7 @@ export default function BalanceSheet() {
                           <td colSpan={4} style={{ fontStyle: 'italic', paddingLeft: 12 }}>{sub.sub_type}</td>
                         </tr>
                         {sub.account_ledgers.map((node) => (
-                          <CoaTreeRows key={node.account_code} node={node} normal={typeGroup.normal} />
+                          <CoaTreeRows key={node.account_code} node={node} normal={typeGroup.normal} onDrill={setDrill} />
                         ))}
                       </Fragment>
                     ))}
@@ -106,6 +145,8 @@ export default function BalanceSheet() {
           </div>
         </div>
       )}
+
+      {drill && report && <AccountTransactionsModal account={drill} asOf={report.as_of} scope={ranScope} onClose={() => setDrill(null)} />}
     </div>
   );
 }

@@ -1,8 +1,10 @@
 const express = require('express');
 const pool = require('../db');
+const { insertNumbered } = require('../lib/docNumber');
 const { requireAuth, requirePermission } = require('../middleware/auth');
 const { computeCustomerRefundGl } = require('../lib/glImpact');
 const { assertPeriodOpen } = require('../lib/accountingPeriod');
+const { headerDepartmentError } = require('../lib/requireDepartment');
 
 const router = express.Router();
 // Customer Refund (CRFND-####): returns cash to a customer against one or more of their
@@ -17,6 +19,26 @@ async function logAudit(conn, { refundId, userId, eventType, fieldName = null, o
      VALUES ('CustomerRefund', ?, ?, ?, ?, ?, ?)`,
     [refundId, eventType, fieldName, oldValue === null ? null : String(oldValue), newValue === null ? null : String(newValue), userId]
   );
+}
+
+// Customer Payments applied to a refund (2026-11-05; customer_payment_lines.customer_refund_id,
+// add-payment-refund-apply.js). A refund debits A/R, so it stays open until payments are applied to
+// it; its amount due is the refund less what non-voided payments apply.
+let refundApplyReady = false;
+async function refundsReady(q = pool) {
+  if (!refundApplyReady) {
+    const [c] = await q.query("SHOW COLUMNS FROM customer_payment_lines LIKE 'customer_refund_id'");
+    refundApplyReady = c.length > 0;
+  }
+  return refundApplyReady;
+}
+async function paymentsApplied(q, refundId) {
+  if (!(await refundsReady(q))) return [];
+  const [rows] = await q.query(
+    `SELECT cpl.id, cpl.customer_payment_id, cpl.applied_amount, cp.customer_payment_no, cp.date_created, cp.status
+       FROM customer_payment_lines cpl JOIN customer_payments cp ON cp.id = cpl.customer_payment_id
+      WHERE cpl.customer_refund_id = ? AND cp.status <> 'voided' ORDER BY cp.date_created, cp.id`, [refundId]);
+  return rows;
 }
 
 // Powers the create form: the customer's refundable payments plus the two default GL accounts.
@@ -59,7 +81,7 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const [rows] = await pool.query(
       `SELECT cr.id, cr.customer_refund_no, cr.date_created, cr.refund_amount, cr.status,
-              c.name AS customer_name, pm.name AS payment_method_name
+              cr.customer_id, c.name AS customer_name, pm.name AS payment_method_name
        FROM customer_refunds cr
        LEFT JOIN customers c ON c.id = cr.customer_id
        LEFT JOIN payment_methods pm ON pm.id = cr.payment_method_id
@@ -106,7 +128,13 @@ router.get('/:id', requireAuth, requirePermission(ROUTE, 'can_view'), async (req
     );
 
     const glImpact = await computeCustomerRefundGl(cr);
-    res.json({ ...cr, lines, gl_impact: glImpact });
+    const payments = await paymentsApplied(pool, cr.id);
+    const paid = payments.reduce((t, p) => t + Number(p.applied_amount), 0);
+    res.json({
+      ...cr, lines, gl_impact: glImpact, payments_applied: payments,
+      amount_paid: Number(paid.toFixed(2)),
+      amount_due: cr.status === 'voided' ? 0 : Number(Math.max(Number(cr.refund_amount) - paid, 0).toFixed(2)),
+    });
   } catch (err) {
     next(err);
   }
@@ -137,6 +165,8 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
     } = req.body;
 
     if (!customerId) return res.status(400).json({ error: 'Customer is required.' });
+    const deptError = headerDepartmentError(departmentId);
+    if (deptError) return res.status(400).json({ error: deptError });
 
     const submitted = (Array.isArray(lines) ? lines : []).filter((l) => l.customer_payment_id && Number(l.refund_amount) > 0);
     if (!submitted.length) return res.status(400).json({ error: 'Enter a refund amount for at least one payment.' });
@@ -164,19 +194,22 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
     await assertPeriodOpen(dateCreated, 'ar', conn);
 
     await conn.beginTransaction();
-    const [result] = await conn.query(
-      `INSERT INTO customer_refunds
-         (customer_refund_no, date_created, customer_id, department_id, office_location_id, account_id,
-          ar_account_id, payment_method_id, refund_amount, memo, issued_by_user_id, created_by_user_id)
-       VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        dateCreated || new Date().toISOString().slice(0, 10), customerId, departmentId || null,
-        officeLocationId || null, accId, arId, paymentMethodId || null, refundTotal, memo || null,
-        req.user.id, req.user.id,
-      ]
-    );
-    const refundId = result.insertId;
-    await conn.query('UPDATE customer_refunds SET customer_refund_no = ? WHERE id = ?', [`CRFND-${refundId}`, refundId]);
+    const { id: refundId } = await insertNumbered(conn, {
+      table: 'customer_refunds',
+      column: 'customer_refund_no',
+      prefix: 'CRFND-',
+      run: (no) => conn.query(
+        `INSERT INTO customer_refunds
+           (customer_refund_no, date_created, customer_id, department_id, office_location_id, account_id,
+            ar_account_id, payment_method_id, refund_amount, memo, issued_by_user_id, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          no, dateCreated || new Date().toISOString().slice(0, 10), customerId, departmentId || null,
+          officeLocationId || null, accId, arId, paymentMethodId || null, refundTotal, memo || null,
+          req.user.id, req.user.id,
+        ]
+      ),
+    });
 
     for (const l of prepared) {
       await conn.query(
@@ -199,13 +232,19 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
   }
 });
 
-router.put('/:id/void', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
+router.put('/:id/void', requireAuth, requirePermission(ROUTE, 'can_void'), async (req, res, next) => {
   const conn = await pool.getConnection();
   try {
     const [[cr]] = await conn.query('SELECT status, date_created FROM customer_refunds WHERE id = ?', [req.params.id]);
     if (cr) await assertPeriodOpen(cr.date_created, 'ar', conn);
     if (!cr) return res.status(404).json({ error: 'Not found' });
     if (cr.status === 'voided') return res.status(409).json({ error: 'This Customer Refund is already voided.' });
+    const applied = await paymentsApplied(conn, req.params.id);
+    if (applied.length) {
+      return res.status(409).json({
+        error: `Customer Payment(s) ${applied.map((p) => p.customer_payment_no).join(', ')} are applied to this refund -- unapply them first.`,
+      });
+    }
 
     await conn.beginTransaction();
     await conn.query("UPDATE customer_refunds SET status = 'voided', voided_by_user_id = ?, voided_at = NOW() WHERE id = ?", [req.user.id, req.params.id]);

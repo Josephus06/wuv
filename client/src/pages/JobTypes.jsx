@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import Pagination from '../components/Pagination';
@@ -51,7 +51,7 @@ export default function JobTypes() {
     <div>
       <div className="page-header">
         <h1>Job Types</h1>
-        {can('/job-types', 'can_add') && <button className="btn btn-primary" onClick={() => navigate('/job-types/new')}>Add Job</button>}
+        {can('/job-types', 'can_add') && <Link className="btn btn-primary" to={'/job-types/new'}>Add Job</Link>}
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
@@ -90,7 +90,7 @@ export default function JobTypes() {
                     <td>{row.asset_account_name || '—'}</td>
                     <td>{row.income_account_name || '—'}</td>
                     <td style={{ display: 'flex', gap: 6 }}>
-                      {can('/job-types', 'can_edit') && <button className="btn btn-sm btn-primary" onClick={() => navigate(`/job-types/${row.id}/edit`)}>Edit</button>}
+                      {can('/job-types', 'can_edit') && <Link className="btn btn-sm btn-primary" to={`/job-types/${row.id}/edit`}>Edit</Link>}
                       {can('/job-types', 'can_delete') && <button className="btn btn-sm btn-danger" onClick={() => handleDelete(row)}>Delete</button>}
                     </td>
                   </tr>

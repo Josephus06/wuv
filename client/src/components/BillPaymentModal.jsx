@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import api from '../api/client';
 import EntityPicker from './EntityPicker';
 import LoadingSpinner from './LoadingSpinner';
+import { displayDate } from '../utils/dates';
 
 function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? String(v).slice(0, 10) : ''; }
+function formatDate(v) { return v ? displayDate(String(v).slice(0, 10)) : ''; }
 function accountLabel(a) { return a ? `${a.account_code} — ${a.account_name}` : ''; }
 function pmLabel(p) { return p ? p.name : ''; }
 
@@ -19,7 +20,12 @@ const PAYMENT_TYPES = ['full', 'partial', 'balance', 'downpayment'];
 // payment with the vendor's own existing open Bill Credits (Debits tab). Selecting
 // Payment Method = CHECK swaps in Check Date/Check No in place of the generic Reference #,
 // matching the real modal's conditional sub-fields.
-export default function BillPaymentModal({ vendorBillId, onClose, onSaved }) {
+//
+// With `paymentId` instead of `vendorBillId` it EDITS that saved payment: the same form, filled
+// in, offering the vendor's open bills/credits plus the ones this payment already settles (their
+// Amount Due shown as it would be without this payment). Save then re-applies it server-side.
+export default function BillPaymentModal({ vendorBillId, paymentId, onClose, onSaved }) {
+  const editing = !!paymentId;
   const [data, setData] = useState(null);
   const [dateCreated, setDateCreated] = useState(new Date().toISOString().slice(0, 10));
   const [paymentType, setPaymentType] = useState('full');
@@ -44,7 +50,7 @@ export default function BillPaymentModal({ vendorBillId, onClose, onSaved }) {
 
   useEffect(() => {
     Promise.all([
-      api.get(`/bill-payments/for-vendor-bill/${vendorBillId}`),
+      editing ? api.get(`/bill-payments/${paymentId}/edit-options`) : api.get(`/bill-payments/for-vendor-bill/${vendorBillId}`),
       api.get('/lookups/chart-of-accounts'),
       api.get('/lookups/locations'),
       api.get('/lookups/payment-methods'),
@@ -54,19 +60,36 @@ export default function BillPaymentModal({ vendorBillId, onClose, onSaved }) {
       setAccounts(acctRes.data);
       setLocations(locRes.data);
       setPaymentMethods(pmRes.data);
-      setPayeeName(d.supplier_name || '');
-      setMemo(d.memo || '');
-      if (d.ap_account_id) setApAccount({ id: d.ap_account_id, account_code: d.account_code, account_name: d.account_name });
-      if (d.office_location_id) setOfficeLocation({ id: d.office_location_id });
-      setApplyAmounts({ [vendorBillId]: d.apply_lines.find((l) => l.vendor_bill_id === Number(vendorBillId))?.amount_due || 0 });
+      if (editing) {
+        const day = (v) => (v ? String(v).slice(0, 10) : '');
+        setDateCreated(day(d.date_created));
+        setPaymentType(d.payment_type || 'full');
+        setPayeeName(d.payee_name || '');
+        setMemo(d.memo || '');
+        setReferenceNo(d.reference_no || '');
+        setCheckDate(day(d.check_date) || day(d.date_created));
+        setCheckNo(d.check_no || '');
+        if (d.ap_account_id) setApAccount({ id: d.ap_account_id, account_code: d.ap_account_code, account_name: d.ap_account_name });
+        if (d.bank_account_id) setBankAccount({ id: d.bank_account_id, account_code: d.bank_account_code, account_name: d.bank_account_name });
+        if (d.payment_method_id) setPaymentMethod({ id: d.payment_method_id, name: d.payment_method_name });
+        if (d.office_location_id) setOfficeLocation({ id: d.office_location_id, location_name: d.office_location_name });
+        setApplyAmounts(Object.fromEntries(d.apply_lines.filter((l) => Number(l.applied_amount) > 0).map((l) => [l.vendor_bill_id, l.applied_amount])));
+        setDebitAmounts(Object.fromEntries(d.debit_lines.filter((l) => Number(l.applied_amount) > 0).map((l) => [l.bill_credit_id, l.applied_amount])));
+      } else {
+        setPayeeName(d.supplier_name || '');
+        setMemo(d.memo || '');
+        if (d.ap_account_id) setApAccount({ id: d.ap_account_id, account_code: d.account_code, account_name: d.account_name });
+        if (d.office_location_id) setOfficeLocation({ id: d.office_location_id });
+        setApplyAmounts({ [vendorBillId]: d.apply_lines.find((l) => l.vendor_bill_id === Number(vendorBillId))?.amount_due || 0 });
+      }
       setLoading(false);
-    });
-  }, [vendorBillId]);
+    }).catch((e) => { setError(e.response?.data?.error || 'Could not load the payment.'); setLoading(false); });
+  }, [vendorBillId, paymentId, editing]);
 
   if (loading || !data) {
     return (
-      <div className="modal-overlay">
-        <div className="modal modal-xl"><LoadingSpinner /></div>
+      <div className="modal-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+        <div className="modal modal-xl">{error ? <div className="error-banner">{error}</div> : <LoadingSpinner />}</div>
       </div>
     );
   }
@@ -86,7 +109,8 @@ export default function BillPaymentModal({ vendorBillId, onClose, onSaved }) {
 
     setSaving(true);
     try {
-      const { data: bp } = await api.post('/bill-payments', {
+      const save = (body) => (editing ? api.put(`/bill-payments/${paymentId}`, body) : api.post('/bill-payments', body));
+      const { data: bp } = await save({
         supplier_id: data.supplier_id,
         date_created: dateCreated,
         payment_type: paymentType,
@@ -114,12 +138,18 @@ export default function BillPaymentModal({ vendorBillId, onClose, onSaved }) {
     <div className="modal-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal modal-xl" style={{ padding: 0, overflow: 'hidden' }}>
         <div className="estimate-banner" style={{ borderRadius: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <h2 style={{ margin: 0, color: '#fff' }}>Bill Payment</h2>
+          <h2 style={{ margin: 0, color: '#fff' }}>{editing ? `Edit Bill Payment ${data.bill_payment_no || ''}` : 'Bill Payment'}</h2>
           <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', color: '#fff', fontSize: 24, lineHeight: 1, cursor: 'pointer' }}>×</button>
         </div>
 
         <div style={{ padding: 24 }}>
           {error && <div className="error-banner">{error}</div>}
+          {editing && data.reconciled && (
+            <div className="muted" style={{ marginBottom: 8 }}>
+              This payment is matched on a bank reconciliation: its date, bank account and amounts are locked. Memo, payee,
+              reference and the other details can still change.
+            </div>
+          )}
 
           <div className="review-grid" style={{ gridTemplateColumns: '1fr 1fr 260px' }}>
             <div>

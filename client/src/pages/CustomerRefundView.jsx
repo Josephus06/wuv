@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
+import { usePeriodLocked } from '../utils/periodLock';
 import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate, displayAuditTime } from '../utils/dates';
+import { CustomerLink } from '../components/PartyLink';
 
 function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
 
 const STATUS_LABELS = { posted: 'POSTED', voided: 'VOID' };
 
@@ -51,9 +54,13 @@ export default function CustomerRefundView() {
     }
   }
 
+  // Closed accounting period: no Edit / Void / Cancel (utils/periodLock.js; the server refuses them too).
+  const periodLocked = usePeriodLocked(cr?.date_created, 'ar');
+
   if (loading || !cr) return <LoadingSpinner />;
 
-  const canEdit = can('/customer-refunds', 'can_edit');
+  const canEdit = (can('/customer-refunds', 'can_edit') && !periodLocked);
+  const canVoid = (can('/customer-refunds', 'can_void') && !periodLocked);
   const isOpen = cr.status !== 'voided';
 
   return (
@@ -64,11 +71,16 @@ export default function CustomerRefundView() {
           <button className="btn btn-sm" onClick={() => navigate(-1)}>Back to Lists</button>
           {canEdit && isOpen && <button className="btn btn-sm" disabled title="Editing a posted Customer Refund isn't implemented in this build -- void and re-enter instead">Edit</button>}
           <button className="btn btn-sm" disabled title="Print formats aren't implemented in this build">Print</button>
-          {canEdit && isOpen && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
+          {canVoid && isOpen && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
         </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+      {periodLocked && (
+        <div className="warning-banner" style={{ marginBottom: 12 }}>
+          The accounting period for this transaction is closed ({periodLocked}), so it can no longer be edited, voided or cancelled.
+        </div>
+      )}
 
       <div className="estimate-banner">
         <div className="estimate-banner-title">
@@ -79,7 +91,7 @@ export default function CustomerRefundView() {
 
         <div className="estimate-detail-grid">
           <div>
-            <div>Customer : <span className="hi">{cr.customer_name}</span></div>
+            <div>Customer : <span className="hi"><CustomerLink id={cr.customer_id} name={cr.customer_name} /></span></div>
             <div>TIN : <span className="hi">{cr.customer_tin || '—'}</span></div>
           </div>
           <div>
@@ -99,10 +111,17 @@ export default function CustomerRefundView() {
 
       <div className="estimate-footer card" style={{ marginTop: 20 }}>
         <div><span className="muted">Total Refund</span><div className="hi-lg">{money(cr.refund_amount)}</div></div>
+        {cr.amount_due !== undefined && (
+          <>
+            <div><span className="muted">Paid by Customer Payments</span><div className="hi-lg">{money(cr.amount_paid)}</div></div>
+            <div><span className="muted">Amount Due</span><div className="hi-lg">{money(cr.amount_due)}</div></div>
+          </>
+        )}
       </div>
 
       <div className="status-tabs" style={{ marginTop: 20 }}>
         <button className={`status-tab ${tab === 'apply' ? 'active' : ''}`} onClick={() => setTab('apply')}>Apply {money(cr.refund_amount)}</button>
+        <button className={`status-tab ${tab === 'payments' ? 'active' : ''}`} onClick={() => setTab('payments')}>Payments {money(cr.amount_paid || 0)}</button>
         <button className={`status-tab ${tab === 'gl' ? 'active' : ''}`} onClick={() => setTab('gl')}>GL Impact</button>
         <button className={`status-tab ${tab === 'system' ? 'active' : ''}`} onClick={() => setTab('system')}>System Info</button>
       </div>
@@ -119,11 +138,36 @@ export default function CustomerRefundView() {
                 {cr.lines.map((l) => (
                   <tr key={l.id}>
                     <td>{l.customer_payment_id
-                      ? <button type="button" className="link-btn" onClick={() => navigate(`/customer-payments/${l.customer_payment_id}`)}>{l.customer_payment_no}</button>
+                      ? <Link className="link-btn" to={`/customer-payments/${l.customer_payment_id}`}>{l.customer_payment_no}</Link>
                       : (l.customer_payment_no || '—')}</td>
                     <td>{formatDate(l.payment_date)}</td>
                     <td>{money(l.original_amount)}</td>
                     <td>{money(l.refund_amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Customer Payments applied to this refund (2026-11-05) -- applied from the payment's APPLY tab. */}
+      {tab === 'payments' && (
+        <div className="card">
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Customer Payment #</th><th>Date</th><th>Applied Amount</th></tr></thead>
+              <tbody>
+                {!(cr.payments_applied || []).length && (
+                  <tr><td colSpan={3} className="muted" style={{ textAlign: 'center', padding: 20 }}>
+                    No Customer Payment is applied to this refund yet -- apply one from the payment&apos;s APPLY tab.
+                  </td></tr>
+                )}
+                {(cr.payments_applied || []).map((p) => (
+                  <tr key={p.id}>
+                    <td><Link className="link-btn" to={`/customer-payments/${p.customer_payment_id}`}>{p.customer_payment_no}</Link></td>
+                    <td>{formatDate(p.date_created)}</td>
+                    <td>{money(p.applied_amount)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -166,7 +210,7 @@ export default function CustomerRefundView() {
         <div className="card">
           <DataTable
             columns={[
-              { key: 'set_at', label: 'Date Time', render: (r) => new Date(r.set_at).toLocaleString() },
+              { key: 'set_at', label: 'Date Time', render: (r) => displayAuditTime(r.set_at) },
               { key: 'set_by_name', label: 'Set By' },
               { key: 'event_type', label: 'Type' },
               { key: 'field_name', label: 'Field' },

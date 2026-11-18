@@ -40,31 +40,43 @@ const ROLE_TO_SCHEME = [
 
 function round2(n) { return Math.round((Number(n) + Number.EPSILON) * 100) / 100; }
 
-// A scheme is a ladder of Total-Weighted-Sales brackets -> a fixed commission amount. Find
-// the bracket the amount falls in. Below the first bracket pays nothing; above the last
-// bracket earns the top bracket's amount (the ladder doesn't cap what it recognises).
+// A scheme is a ladder of Total-Weighted-Sales brackets -> a fixed commission amount. Below the
+// first bracket pays nothing; above the last earns the top bracket's amount (the ladder doesn't cap
+// what it recognises).
+//
+// The ladders have GAPS -- Sales Manager runs ...-10,500,000.00 then 10,600,000.01-..., so
+// 10,500,000.01 to 10,600,000.00 is in no bracket. An amount in a gap takes the NEXT bracket up, as
+// the source does (asked 2026-10-15): JICA EMMANUEL C. WU's January passing total 10,506,802.95 reads
+// 31,800 there, and his August 12,508,863.56 reads 37,800. This used to pay 0 in a gap.
 function lookupCommission(brackets, amount) {
   const amt = Number(amount) || 0;
   if (amt <= 0 || !brackets.length) return 0;
-  for (const b of brackets) {
-    if (amt >= Number(b.min_weighted_sales) && amt <= Number(b.max_weighted_sales)) return Number(b.commission_amount) || 0;
-  }
-  const top = brackets.reduce((a, b) => (Number(b.max_weighted_sales) > Number(a.max_weighted_sales) ? b : a));
-  if (amt > Number(top.max_weighted_sales)) return Number(top.commission_amount) || 0;
-  return 0;
+  const ladder = [...brackets].sort((x, y) => Number(x.max_weighted_sales) - Number(y.max_weighted_sales));
+  if (amt < Number(ladder[0].min_weighted_sales)) return 0;
+  const hit = ladder.find((b) => amt <= Number(b.max_weighted_sales));
+  return Number((hit || ladder[ladder.length - 1]).commission_amount) || 0;
 }
 
 // The rep plus everyone reporting up to them, as a set of employee ids -- what their team
-// weighted-sales rolls up. Walks the users.supervisor_id tree downward from the rep's own
+// weighted-sales rolls up. Walks the user_supervisors graph downward from the rep's own
 // user; a rep with no user account (or no reports) rolls up to just themselves.
 async function getTeamEmployeeIds(employeeId, rootUserId) {
   const team = new Set([Number(employeeId)]);
   if (!rootUserId) return [...team];
 
-  // One pass over the active user tree, then BFS from the root user downward.
-  const [users] = await pool.query('SELECT id, employee_id, supervisor_id FROM users WHERE is_active = TRUE');
+  // One pass over the active reporting graph, then BFS from the root user downward. Read
+  // from user_supervisors rather than users.supervisor_id: a rep may report to several
+  // supervisors, so this is a graph, not a tree, and a rep with two supervisors rolls up
+  // into BOTH of their team totals. `visitedUsers` keeps a rep counted once per team even
+  // when two paths reach them.
+  const [links] = await pool.query(
+    `SELECT u.id, u.employee_id, us.supervisor_id
+       FROM user_supervisors us
+       JOIN users u ON u.id = us.user_id
+      WHERE u.is_active = TRUE`
+  );
   const childrenBySupervisor = new Map();
-  for (const u of users) {
+  for (const u of links) {
     if (u.supervisor_id == null) continue;
     if (!childrenBySupervisor.has(u.supervisor_id)) childrenBySupervisor.set(u.supervisor_id, []);
     childrenBySupervisor.get(u.supervisor_id).push(u);
@@ -89,6 +101,32 @@ async function getSbuDivisionIds(userId) {
   if (!userId) return [];
   const [rows] = await pool.query('SELECT sales_division_id FROM user_sales_divisions WHERE user_id = ?', [userId]);
   return rows.map((r) => r.sales_division_id);
+}
+
+// Whose sales a rep is read at -- the WHERE both the monthly report and its JO detail use.
+//
+//   Sales Manager   every sales order in every division except the branches (asked 2026-10-15:
+//                   JICA EMMANUEL C. WU's January read 9,833,453.53 here, his own reporting tree,
+//                   against the source's 12,954,199.85 -- which is the whole company's 13,645,932.27
+//                   less Branch - Ayala and Branch-SM_Cebu, to the centavo). Marketing, Support and
+//                   E-Commerce count; a division whose name starts "Branch" does not.
+//   SBU Head        their reporting team's orders plus every order in the divisions they own
+//   anyone else     their reporting team's orders (sales_rep_id in the team)
+const BRANCH_DIVISIONS_SQL = "SELECT id FROM sales_divisions WHERE name LIKE 'Branch%'";
+async function salesScope(employeeId, user) {
+  const teamEmployeeIds = await getTeamEmployeeIds(employeeId, user ? user.id : null);
+  const isManager = !!(user && user.is_sales_manager && !user.is_sales_business_unit);
+  if (isManager) {
+    return {
+      sql: `(so.sales_division_id IS NULL OR so.sales_division_id NOT IN (${BRANCH_DIVISIONS_SQL}))`,
+      params: [], teamEmployeeIds, sbuDivisionIds: [], companyWide: true,
+    };
+  }
+  const sbuDivisionIds = user && user.is_sales_business_unit ? await getSbuDivisionIds(user.id) : [];
+  if (sbuDivisionIds.length) {
+    return { sql: '(so.sales_rep_id IN (?) OR so.sales_division_id IN (?))', params: [teamEmployeeIds, sbuDivisionIds], teamEmployeeIds, sbuDivisionIds };
+  }
+  return { sql: 'so.sales_rep_id IN (?)', params: [teamEmployeeIds], teamEmployeeIds, sbuDivisionIds };
 }
 
 function resolveScheme(user, brackets) {
@@ -125,28 +163,20 @@ async function buildCommissionReport(employeeId, year, filters = {}) {
   );
   const { schemeName } = resolveScheme(user, []);
   const brackets = await loadSchemeBrackets(schemeName);
-  const teamEmployeeIds = await getTeamEmployeeIds(employeeId, user ? user.id : null);
-  const sbuDivisionIds = user && user.is_sales_business_unit ? await getSbuDivisionIds(user.id) : [];
-
-  // A rep's sales are their reporting team's (sales_rep_id in the team). An SBU owns whole
-  // divisions on top of that, so its sales also include everything in the divisions it
-  // owns, whoever the rep was. The two are unioned.
-  const whereParts = [];
-  const params = [];
-  // Attribute by the SALES ORDER's rep (matches the live report's "Sales Rep" column), so an
-  // order still pending its job order -- and any order whose job's rep differs from its sales
-  // rep -- is credited to the sales order's owning rep exactly as live does.
-  if (sbuDivisionIds.length) {
-    whereParts.push('(so.sales_rep_id IN (?) OR so.sales_division_id IN (?))');
-    params.push(teamEmployeeIds, sbuDivisionIds);
-  } else {
-    whereParts.push('so.sales_rep_id IN (?)');
-    params.push(teamEmployeeIds);
-  }
+  // Whose orders count (salesScope): the reporting team; an SBU's divisions too; a Sales Manager the
+  // whole company less the branches. Attributed by the SALES ORDER's rep, as the source does.
+  const scope = await salesScope(employeeId, user);
+  const { teamEmployeeIds, sbuDivisionIds } = scope;
+  const whereParts = [scope.sql];
+  const params = [...scope.params];
   whereParts.push('YEAR(so.date_created) = ?');
   params.push(year);
   // Cancelled sales orders never count toward weighted sales (or anything downstream).
   whereParts.push("(so.status IS NULL OR so.status <> 'cancelled')");
+  // Nor does a line whose job order was cancelled -- the SO's own total already leaves it out
+  // (routes/salesOrders.js LIVE_LINE), and Weighted Sales must agree (SO-70642's 250 delivery fee,
+  // 2026-10-22).
+  whereParts.push("(jo.id IS NULL OR jo.status <> 'Cancelled')");
   if (filters.salesDivisionId) { whereParts.push('so.sales_division_id = ?'); params.push(filters.salesDivisionId); }
 
   // Weighted sales is every (non-cancelled) sales-order LINE -- including lines on orders that
@@ -204,7 +234,7 @@ async function buildCommissionReport(employeeId, year, filters = {}) {
     const row = months[l.month - 1];
     if (!row) continue;
     row.weighted_sales += Number(l.net_of_tax);
-    if (!row.division_name && l.division_name) row.division_name = l.division_name;
+    if (!row.division_name && l.division_name) row.division_name = scope.companyWide ? 'All (excl. branches)' : l.division_name;
     if (l.passing) {
       row.passing_total += Number(l.net_of_tax);
       row.paid_passing += paidByJo.get(l.jo_id) || 0;
@@ -214,35 +244,66 @@ async function buildCommissionReport(employeeId, year, filters = {}) {
   // Released commission + voucher expense adjustments, sourced from this employee's Commission
   // Vouchers via the shared waterfall allocation (deductions from the earliest month, refunds
   // added, net = the voucher's total). See lib/commissionRelease.js.
-  const { releasedByMonth, deductedByMonth, refundedByMonth } = await releaseByMonthForEmployee(employeeId, year);
+  const { grossReleasedByMonth, deductedByMonth, refundedByMonth } = await releaseByMonthForEmployee(employeeId, year);
+
+  // The Commission Payable(s) raised for each month (asked 2026-11-18), so a month with commission
+  // but no payable -- which a Commission Voucher cannot release -- is visible on the report. A
+  // payable covering a range of months is listed on each of them. Void payables are left out.
+  const payablesByMonth = Array.from({ length: 13 }, () => []);
+  const [cps] = await pool.query(
+    `SELECT id, commission_payable_no, status,
+            YEAR(period_from) AS fy, MONTH(period_from) AS fm, YEAR(COALESCE(period_to, period_from)) AS ty, MONTH(COALESCE(period_to, period_from)) AS tm
+       FROM commission_payables
+      WHERE employee_id = ? AND status <> 'void'
+        AND YEAR(period_from) <= ? AND YEAR(COALESCE(period_to, period_from)) >= ?
+      ORDER BY period_from, id`,
+    [employeeId, year, year]
+  );
+  for (const cp of cps) {
+    const from = Number(cp.fy) < Number(year) ? 1 : Number(cp.fm);
+    const to = Number(cp.ty) > Number(year) ? 12 : Number(cp.tm);
+    for (let m = from; m <= to; m += 1) {
+      payablesByMonth[m].push({ id: cp.id, commission_payable_no: cp.commission_payable_no, status: cp.status });
+    }
+  }
 
   const rows = months.map((r) => {
     const weighted = round2(r.weighted_sales);
-    const passingTotal = round2(r.passing_total);
-    const paid = round2(r.paid_passing);
-    const estimated = round2(lookupCommission(brackets, weighted));
+    const pct = r.quota > 0 ? round2((weighted / r.quota) * 100) : 0;
+    // A month under 100% of its quota earns nothing (asked 2026-10-15): Estimated through Unpaid
+    // read 0, and so does everything built on Confirmed (Commission Payable, vouchers). A month
+    // with no quota set has no % to judge it by and is computed as before.
+    const belowQuota = r.quota > 0 && pct < 100;
+    const passingTotal = belowQuota ? 0 : round2(r.passing_total);
+    const paid = belowQuota ? 0 : round2(r.paid_passing);
+    const estimated = belowQuota ? 0 : round2(lookupCommission(brackets, weighted));
     const expected = round2(lookupCommission(brackets, passingTotal));
     const confirmed = passingTotal > 0 ? round2((paid / passingTotal) * expected) : 0;
-    const released = round2(releasedByMonth[r.month]);
+    // Released and Unpaid as the source system reads them (asked 2026-10-03, "released commission
+    // not matched"): Released is everything the vouchers paid against the month, before the
+    // voucher's deductions; Unpaid = Confirmed - Released, so an over-release shows negative
+    // (Nina, January: -543.52 in both). Deducted / Refunded stay as their own columns, for
+    // information -- they no longer reduce Released.
+    const released = round2(grossReleasedByMonth[r.month]);
     const deducted = round2(deductedByMonth[r.month]);
     const refunded = round2(refundedByMonth[r.month]);
-    // Unpaid = Confirmed − (Released + Deducted): the deduction lowers what's still owed, and a
-    // later refund that cancels the deduction restores it (released goes up, deducted goes to 0).
-    const unpaid = round2(confirmed - (released + deducted));
-    const pct = r.quota > 0 ? round2((weighted / r.quota) * 100) : 0;
+    const unpaid = round2(confirmed - released);
     return {
       month: r.month, month_name: r.month_name, quota: round2(r.quota),
       division_name: r.division_name, weighted_sales: weighted, performance_pct: pct,
       estimated_commission: estimated, passing_gp_total: passingTotal,
-      expected_commission: expected, confirmed_commission: confirmed,
+      // paid_passing_total: the invoiced (paid) part of the passing JOs -- the numerator of
+      // Confirmed, shown on the JO Detail's breakdown.
+      expected_commission: expected, paid_passing_total: paid, confirmed_commission: confirmed,
       released_commission: released, expenses_deducted: deducted, expenses_refunded: refunded,
       unpaid_commission: unpaid,
+      payables: payablesByMonth[r.month] || [],
     };
   });
 
   return {
     employee_id: employee.id, employee_name: employee.name, year: Number(year),
-    scheme_name: schemeName, team_size: teamEmployeeIds.length,
+    scheme_name: schemeName, team_size: teamEmployeeIds.length, company_wide: !!scope.companyWide,
     sbu_division_count: sbuDivisionIds.length, rows,
   };
 }
@@ -301,32 +362,32 @@ async function buildCommissionJoDetail(employeeId, year, month, filters = {}) {
   if (!employee) return null;
 
   const [[user]] = await pool.query(
-    `SELECT id, is_sales_business_unit FROM users WHERE employee_id = ? AND is_active = TRUE ORDER BY id LIMIT 1`,
+    `SELECT id, is_sales_manager, is_sales_business_unit FROM users WHERE employee_id = ? AND is_active = TRUE ORDER BY id LIMIT 1`,
     [employeeId]
   );
-  const teamEmployeeIds = await getTeamEmployeeIds(employeeId, user ? user.id : null);
-  const sbuDivisionIds = user && user.is_sales_business_unit ? await getSbuDivisionIds(user.id) : [];
-
-  const whereParts = [];
-  const params = [];
-  if (sbuDivisionIds.length) {
-    whereParts.push('(so.sales_rep_id IN (?) OR so.sales_division_id IN (?))');
-    params.push(teamEmployeeIds, sbuDivisionIds);
-  } else {
-    whereParts.push('so.sales_rep_id IN (?)');
-    params.push(teamEmployeeIds);
-  }
+  // The same scope as the monthly report (salesScope), so the detail adds up to its row.
+  const scope = await salesScope(employeeId, user);
+  const whereParts = [scope.sql];
+  const params = [...scope.params];
   whereParts.push('YEAR(so.date_created) = ?'); params.push(Number(year));
   whereParts.push('MONTH(so.date_created) = ?'); params.push(Number(month));
-  // Cancelled sales orders are excluded here too, so the detail matches the monthly totals.
+  // Cancelled sales orders are excluded here too, so the detail matches the monthly totals -- and
+  // cancelled job orders, as the monthly report leaves them out (2026-10-22).
   whereParts.push("(so.status IS NULL OR so.status <> 'cancelled')");
+  whereParts.push("jo.status <> 'Cancelled'");
   if (filters.salesDivisionId) { whereParts.push('so.sales_division_id = ?'); params.push(filters.salesDivisionId); }
+  // Only the JO its sales-order line belongs to. A rework JO (RWIP) hangs off the same line as the
+  // original, but the line points at the original: counting both put the line's net in twice
+  // (Amelyn A. Pen, January 2026: RWIP-1221's 29,670.93 made this screen's passing total disagree
+  // with the Commission report's, found 2026-10-07). The report counts each line once.
+  whereParts.push('(sol.id IS NULL OR sol.job_order_id = jo.id)');
 
   const [jos] = await pool.query(
-    `SELECT jo.id AS jo_id, jo.job_order_no, so.sales_order_no, c.name AS customer_name,
+    `SELECT jo.id AS jo_id, jo.job_order_no, so.sales_order_no, c.id AS customer_id, c.name AS customer_name,
             jt.display_name AS job_type, COALESCE(sol.net_of_tax, 0) AS net_of_tax,
             -- Fall back to the order-level actual GP when the line has none (see buildCommissionReport).
             COALESCE(NULLIF(sol.gp_rate, 0), so.actual_gp_rate) AS jo_gp_rate, jt.gp_rate_head AS passing_gp_rate,
+            sol.id AS sales_order_line_id, sol.is_approved_low_gp,
             CONCAT(rep.first_name, ' ', rep.last_name) AS rep_name,
             -- Billing docs are at the sales-order level: a DT (internal invoice) and/or the
             -- Sales Invoice it converts to. Show both when present (all JOs of one SO share them).
@@ -353,27 +414,64 @@ async function buildCommissionJoDetail(employeeId, year, month, filters = {}) {
     below: { net_of_tax: 0, paid_invoice: 0, count: 0 },
   };
   const rows = jos.map((j) => {
-    const isPassing = j.jo_gp_rate != null && j.passing_gp_rate != null
+    // Same rule the monthly report uses: a JO passes on its GP rate, OR because someone added
+    // it to commission explicitly (is_approved_low_gp). This detail used to judge on the rate
+    // alone, so an added JO still read "Below GP" here while already counting toward the
+    // month's passing total -- the two screens disagreed about the same job order.
+    const meetsGp = j.jo_gp_rate != null && j.passing_gp_rate != null
       && Number(j.jo_gp_rate) >= Number(j.passing_gp_rate);
+    const addedManually = Number(j.is_approved_low_gp) === 1;
+    const isPassing = meetsGp || addedManually;
     const net = round2(j.net_of_tax);
-    const paid = round2(paidByJo.get(j.jo_id) || 0);
+    const paidRaw = paidByJo.get(j.jo_id) || 0;
+    const paid = round2(paidRaw);
     const bucket = isPassing ? totals.passing : totals.below;
     bucket.net_of_tax = round2(bucket.net_of_tax + net);
-    bucket.paid_invoice = round2(bucket.paid_invoice + paid);
+    // Summed unrounded and rounded once at the end, as the report does -- rounding each JO first
+    // left this total a few centavos off the report's.
+    bucket.paid_raw = (bucket.paid_raw || 0) + paidRaw;
+    bucket.paid_invoice = round2(bucket.paid_raw);
     bucket.count += 1;
     return {
-      job_order_no: j.job_order_no, sales_order_no: j.sales_order_no, customer_name: j.customer_name,
+      job_order_no: j.job_order_no, sales_order_no: j.sales_order_no, customer_id: j.customer_id, customer_name: j.customer_name,
       rep_name: j.rep_name, job_type: j.job_type, gp_rate: j.jo_gp_rate == null ? null : Number(j.jo_gp_rate),
       passing_gp_rate: j.passing_gp_rate == null ? null : Number(j.passing_gp_rate),
       dt_no: j.dt_no || null, invoice_no: j.invoice_no || null,
       net_of_tax: net, paid_invoice: paid, is_passing: isPassing,
+      // The UI needs to tell "passed on its own GP" apart from "was added": only the latter
+      // can be taken back out, and only a JO that has a line can be added in the first place.
+      meets_gp: meetsGp, is_approved_low_gp: addedManually,
+      sales_order_line_id: j.sales_order_line_id || null,
     };
   });
 
+  delete totals.passing.paid_raw;
+  delete totals.below.paid_raw;
+
   return {
     employee_id: employee.id, employee_name: employee.name, year: Number(year), month: Number(month),
-    team_size: teamEmployeeIds.length, sbu_division_count: sbuDivisionIds.length, rows, totals,
+    team_size: scope.teamEmployeeIds.length, sbu_division_count: scope.sbuDivisionIds.length, rows, totals,
   };
 }
 
-module.exports = { buildCommissionReport, buildCommissionJoDetail, getTeamEmployeeIds, getSbuDivisionIds };
+// For DISPLAY on the Commission report and the Commission Summary only (asked 2026-11-18): a month
+// with no Commission Payable shows no Confirmed Commission, and so no Unpaid (Confirmed − Released)
+// -- it is not payable until a CP is raised, and the CP # column reads "No CP" for it. The figures
+// are kept on the row as confirmed_before_cp / unpaid_before_cp.
+//
+// Never apply this to what the Commission Payable or the vouchers compute from: a new CP takes the
+// month's Confirmed from buildCommissionReport, which would otherwise always read 0 for it.
+function withholdConfirmedWithoutPayable(report) {
+  if (!report?.rows) return report;
+  const rows = report.rows.map((r) => {
+    if ((r.payables || []).length) return r;
+    return {
+      ...r,
+      confirmed_before_cp: r.confirmed_commission, unpaid_before_cp: r.unpaid_commission,
+      confirmed_commission: 0, unpaid_commission: round2(0 - Number(r.released_commission || 0)),
+    };
+  });
+  return { ...report, rows };
+}
+
+module.exports = { buildCommissionReport, buildCommissionJoDetail, getTeamEmployeeIds, getSbuDivisionIds, withholdConfirmedWithoutPayable };

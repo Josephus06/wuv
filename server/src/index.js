@@ -76,6 +76,14 @@ const payrollSetupRoutes = require('./routes/payrollSetup');
 const scheduleRoutes = require('./routes/schedule');
 const kioskRoutes = require('./routes/kiosk');
 const kioskAdminRoutes = require('./routes/kioskAdmin');
+// Brought over from GSUITE with the existing modules that call them (2026-11-18 sync).
+const crmRoutes = require('./routes/crm');
+const crmDraftRoutes = require('./routes/crmDrafts');
+const manualRoutes = require('./routes/manual');
+const receivingReportRoutes = require('./routes/receivingReports');
+const repeatWorkRoutes = require('./routes/repeatWork');
+const unitOfMeasuresRoutes = require('./routes/unitOfMeasures');
+const documentAttachmentRoutes = require('./routes/documentAttachments');
 const { ensureAssignedAtColumn } = require('./db/ensureSchema');
 const { ensureDatabaseReady } = require('./db/autoBootstrap');
 const { sendTicketReminders } = require('./scripts/ticket_reminder');
@@ -87,7 +95,9 @@ app.use(cors());
 // each resized client-side to 1600px JPEG (~400KB, ~550KB once base64'd), so the ceiling has to
 // clear roughly 2.2MB of images plus the post text -- 12mb leaves room without inviting an
 // unbounded upload (the feed route caps each decoded image at 4MB on its own).
-app.use(express.json({ limit: '12mb' }));
+// Raised to 14mb with the GSUITE sync: ticket and document attachments take a 10MB file, which
+// base64 inflates to ~13.4MB of JSON.
+app.use(express.json({ limit: '14mb' }));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -165,6 +175,15 @@ app.use('/api/schedule', scheduleRoutes);
 // The branch time clock: no login, a registered device's link + an employee PIN instead.
 app.use('/api/kiosk', kioskRoutes);
 app.use('/api/kiosk-admin', kioskAdminRoutes);
+// /api/crm/drafts before /api/crm, as GSUITE mounts them.
+app.use('/api/crm/drafts', crmDraftRoutes);
+app.use('/api/crm', crmRoutes);
+app.use('/api/manual', manualRoutes);
+app.use('/api/receiving-reports', receivingReportRoutes);
+app.use('/api/repeat-work', repeatWorkRoutes);
+app.use('/api/unit-of-measures', unitOfMeasuresRoutes);
+// BIR 2307 copies and other files on a Customer Payment / Sales Invoice.
+app.use('/api/document-attachments', documentAttachmentRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

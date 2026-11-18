@@ -1,27 +1,97 @@
 const express = require('express');
 const pool = require('../db');
-const { requireAuth, requirePermission } = require('../middleware/auth');
+const { requireAuth, requirePermission, userCan, isSystemAdmin } = require('../middleware/auth');
 const { computeTransitGl } = require('../lib/glImpact');
 const { isNonStockItem } = require('../lib/itemTypes');
 const { assertPeriodOpen } = require('../lib/accountingPeriod');
+const { deriveOnHand } = require('../lib/stockLedger');
+const { insertNumbered } = require('../lib/docNumber');
+const { computeTOStatus } = require('../lib/transferTotals');
+const { sendXlsx, day } = require('../lib/xlsxExport');
 
 const router = express.Router();
 const ROUTE = '/transfer-orders';
 
-// qty_on_hand is joined live from the withdraw-from location rather than read off the
-// line's own stored column -- that column is only a creation-time snapshot, so it goes
-// stale the moment stock moves afterward (e.g. an Inventory Adjustment approved after
-// the TO was raised). Aliasing il.qty_on_hand AS qty_on_hand after l.* overrides the
-// stale value with the live one.
+// Item Fulfillment and Item Receipt have their own permission pages -- they are separate jobs
+// done by different warehouses, and used to ride on the Transfer Order's can_approve, so one
+// switch governed both fulfilling and receiving. See db/add-fulfillment-receipt-pages.js.
+//
+// The rule below is that an endpoint is gated by the PAGE IT SERVES, not by the entity it
+// returns. So the fulfillment list shown inside a Transfer Order stays on ROUTE: revoking Item
+// Fulfillment access should not blank out a panel in the middle of the Transfer Order screen.
+const FULFILLMENT_ROUTE = '/item-fulfillments';
+const RECEIPT_ROUTE = '/item-receipts';
+
+// qty_on_hand is NOT read from the line's own column (a creation-time snapshot) nor from
+// inventory_locations (21 rows for 8,346 item/location pairs, none agreeing with the Bin Card).
+// withLiveOnHand overwrites it with the Bin Card's closing balance at the Withdraw From location.
+// Unit Used says which of the item's own two units this line is asking for -- the warehouse hands
+// over a whole ROLL rather than cutting 24 square feet off it -- and `unit` is rewritten to match
+// whenever somebody picks. Both units come back with every line so the screen can name the two
+// options, and `unit_used_resolved` is what the dropdown shows selected.
+//
+// A NULL unit_used means nobody has chosen, which is true of every line that predates the toggle.
+// It is resolved for DISPLAY only, never written: 'base' where the stored unit IS the item's base
+// unit, 'stock' otherwise -- the same reading stockLedger.js's toBase has always applied to these
+// lines, and the one that suits the 18,756 rows holding a legacy composite ('ROLL-SQFT-738').
+// Nothing on screen moves until a person picks, because the Unit column still prints `l.unit`.
+const UNIT_USED_RESOLVED = `
+  CASE WHEN LOWER(l.unit_used) IN ('base', 'baseunit') THEN 'base'
+       WHEN LOWER(l.unit_used) IN ('stock', 'stockunit') THEN 'stock'
+       WHEN bu.id IS NOT NULL AND UPPER(l.unit) IN (UPPER(bu.title), UPPER(bu.code)) THEN 'base'
+       ELSE 'stock' END`;
+
 const LINE_SELECT = `
   SELECT l.*, i.item_code, i.display_name AS item_name, i.item_type,
-         jo.job_order_no, il.qty_on_hand AS qty_on_hand
+         jo.job_order_no, t.withdraw_from_location_id, i.conversion_factor,
+         bu.title AS base_unit_title, su.title AS stock_unit_title,
+         ${UNIT_USED_RESOLVED} AS unit_used_resolved
   FROM transfer_order_lines l
   JOIN transfer_orders t ON t.id = l.transfer_order_id
   LEFT JOIN inventories i ON i.id = l.item_id
+  LEFT JOIN units_of_measure bu ON bu.id = i.base_unit_id
+  LEFT JOIN units_of_measure su ON su.id = i.stock_unit_id
   LEFT JOIN job_orders jo ON jo.id = l.job_order_id
-  LEFT JOIN inventory_locations il ON il.inventory_id = l.item_id AND il.location_id = t.withdraw_from_location_id
 `;
+
+// Qty on Hand for each line: what the Withdraw From location holds, by the same deriveOnHand the
+// Bin Card, Reallocate and Production use, so this column cannot disagree with them. deriveOnHand
+// answers in Base Unit; a line asking in its Stock Unit ("1 ROLL") is shown on hand in rolls too,
+// or 1 would sit beside a figure hundreds of times larger in a different unit.
+async function withLiveOnHand(db, lines) {
+  const itemIds = lines.map((l) => l.item_id).filter((id) => id != null);
+  if (!itemIds.length) return lines;
+  const byPair = await deriveOnHand(db, itemIds);
+  for (const l of lines) {
+    const base = Number(byPair.get(`${l.item_id}|${l.withdraw_from_location_id}`) || 0);
+    const factor = Number(l.conversion_factor) > 0 ? Number(l.conversion_factor) : 1;
+    l.qty_on_hand = l.unit_used_resolved === 'stock' && l.stock_unit_title ? base / factor : base;
+  }
+  return lines;
+}
+
+// Spelling follows inventory_adjustment_lines.unit_used, whose migrated rows hold 'StockUnit' /
+// 'BaseUnit' beside this app's own 'stock' / 'base'. Nothing migrated into the transfer order
+// column, but folding both here means a bare `=== 'stock'` can never creep in and mis-read a row,
+// which is the defect that cost inventoryAdjustments.js two rounds of fixes.
+const unitUsedIsBase = (v) => ['base', 'baseunit'].includes(String(v || '').trim().toLowerCase());
+const normaliseUnitUsed = (v) => (unitUsedIsBase(v) ? 'base' : 'stock');
+
+// The Unit a line shows once Unit Used is chosen: that item's own Stock Unit or Base Unit, by
+// title ('Square Foot'), which is the spelling this app has always written. An item with no Stock
+// Unit of its own falls back to its Base Unit -- 958 lines are against such an item.
+async function unitTitleFor(db, itemId, unitUsed) {
+  const [[u]] = await db.query(
+    `SELECT bu.title AS base_title, su.title AS stock_title
+       FROM inventories i
+       LEFT JOIN units_of_measure bu ON bu.id = i.base_unit_id
+       LEFT JOIN units_of_measure su ON su.id = i.stock_unit_id
+      WHERE i.id = ?`,
+    [itemId]
+  );
+  if (!u) return null;
+  return unitUsedIsBase(unitUsed) ? u.base_title : (u.stock_title || u.base_title);
+}
 
 async function logAudit(conn, { toId, userId, eventType, fieldName = null, oldValue = null, newValue = null }) {
   await conn.query(
@@ -31,28 +101,11 @@ async function logAudit(conn, { toId, userId, eventType, fieldName = null, oldVa
   );
 }
 
-// The Transfer Order's status is entirely derived from its lines' own running totals --
-// never set directly except for the one manual, terminal exception ('cancelled'). Sums
-// (not per-line comparisons) are what distinguish "partially fulfilled" from "pending
-// receipt / partially fulfilled": some lines can already be fully received while others
-// still haven't been fulfilled at all, and it's the aggregate position across the whole
-// order that decides which of the real system's six tabs a TO sits in.
-function computeTOStatus(lines) {
-  const totalTarget = lines.reduce((s, l) => s + Number(l.adjusted_qty ?? l.qty), 0);
-  const totalFulfilled = lines.reduce((s, l) => s + Number(l.fulfilled || 0), 0);
-  const totalReceived = lines.reduce((s, l) => s + Number(l.received || 0), 0);
-  if (totalFulfilled <= 0) return 'pending_fulfillment';
-  // What separates the two partial states is stock *in transit*, not stock already
-  // received: a partly-fulfilled order whose fulfillments are still unreceived is
-  // "Pending Receipt / Partially Fulfilled" (it has something to receive), while one
-  // whose every fulfillment has landed is plain "Partially Fulfilled" (nothing to
-  // receive -- only more to fulfill). Keying off totalReceived > 0 instead gets the
-  // very first partial fulfillment wrong and hides the Receive button on it.
-  if (totalFulfilled < totalTarget) return totalReceived < totalFulfilled ? 'pending_receipt_partially_fulfilled' : 'partially_fulfilled';
-  return totalReceived < totalFulfilled ? 'pending_receipt' : 'received';
-}
+// Status is derived from the lines' running totals -- see lib/transferTotals.js.
 
 const OPEN_TO_STATUSES = ['pending_fulfillment', 'partially_fulfilled', 'pending_receipt_partially_fulfilled'];
+// Not fulfilled, or partially fulfilled -- what can still be cancelled (2026-10-19).
+const CANCELLABLE_TO_STATUSES = ['pending_fulfillment', 'partially_fulfilled', 'pending_receipt_partially_fulfilled'];
 
 // GL Impact for Item Fulfillment / Item Receipt -- the real system's sandbox (GL Impact
 // tab, `transaction_transactionledgerentries`) posts these as a two-step stock move
@@ -90,9 +143,20 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
     const params = [];
     if (status) { where.push('t.status = ?'); params.push(status); }
     if (search) {
-      where.push('(t.to_no LIKE ? OR jo.job_order_no LIKE ?)');
-      params.push(`%${search}%`, `%${search}%`);
+      where.push('(t.to_no LIKE ? OR jo.job_order_no LIKE ? OR t.memo LIKE ?)');
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
+    if (req.query.withdraw_from) { where.push('t.withdraw_from_location_id = ?'); params.push(req.query.withdraw_from); }
+    if (req.query.transfer_to) { where.push('t.transfer_to_location_id = ?'); params.push(req.query.transfer_to); }
+    // Date Created and Delivery Date (date_needed), each "As of" a day (on or before it) or a
+    // "Period from" one day to another -- the old system's two filters. A bound left blank is no
+    // bound, so an As of filter only ever sends the _to side.
+    const dateRange = (column, from, to) => {
+      if (from) { where.push(`${column} >= ?`); params.push(from); }
+      if (to) { where.push(`${column} <= ?`); params.push(to); }
+    };
+    dateRange('t.date_created', req.query.created_from, req.query.created_to);
+    dateRange('t.date_needed', req.query.needed_from, req.query.needed_to);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const [rows] = await pool.query(
@@ -107,6 +171,35 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
        ORDER BY t.id DESC`,
       params
     );
+    // format=xlsx (asked 2026-11-09): the same rows -- the open tab and every filter -- as a workbook.
+    if (req.query.format === 'xlsx') {
+      const STATUS_LABELS = {
+        pending_fulfillment: 'Pending Fulfillment', partially_fulfilled: 'Partially Fulfilled', pending_receipt: 'Pending Receipt',
+        pending_receipt_partially_fulfilled: 'Pending Receipt / Partially Fulfilled', received: 'Received', cancelled: 'Cancelled',
+      };
+      await sendXlsx(res, {
+        filename: 'transfer-orders.xlsx',
+        sheet: 'Transfer Orders',
+        columns: [
+          { header: 'TO No.', key: 'to_no', width: 14 },
+          { header: 'Date Created', key: 'created', width: 13 },
+          { header: 'Date Needed', key: 'needed', width: 13 },
+          { header: 'Withdraw From', key: 'withdraw_from_name', width: 24 },
+          { header: 'Transfer To', key: 'transfer_to_name', width: 24 },
+          { header: 'Job Order', key: 'job_order_no', width: 18 },
+          { header: 'Requestor', key: 'requestor_name', width: 26 },
+          { header: 'Memo', key: 'memo', width: 50 },
+          { header: 'Status', key: 'status_label', width: 22 },
+        ],
+        rows: rows.map((r) => ({
+          to_no: r.to_no, created: day(r.date_created), needed: day(r.date_needed),
+          withdraw_from_name: r.withdraw_from_name || '', transfer_to_name: r.transfer_to_name || '',
+          job_order_no: r.job_order_no || '', requestor_name: r.requestor_name || '', memo: r.memo || '',
+          status_label: STATUS_LABELS[r.status] || r.status || '',
+        })),
+      });
+      return;
+    }
     res.json(rows);
   } catch (err) {
     next(err);
@@ -127,79 +220,205 @@ function locationRequestorFilters(where, params, query, toAlias) {
   return asOf;
 }
 
-router.get('/item-fulfillments', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
+// Date From / Date To on the saved fulfilment and receipt lists (2026-10-09); either may be left out.
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+function dateRangeFilter(where, params, query, column) {
+  const { date_from: from, date_to: to } = query;
+  if (from && YMD.test(from)) { where.push(`${column} >= ?`); params.push(from); }
+  if (to && YMD.test(to)) { where.push(`${column} <= ?`); params.push(to); }
+}
+
+// Paginated: this list holds 41,001 fulfilments after the transfer-order migration, and it
+// used to return every one of them, with a second query fanning out to all their lines to
+// derive a status.
+router.get('/item-fulfillments', requireAuth, requirePermission(FULFILLMENT_ROUTE, 'can_view'), async (req, res, next) => {
   try {
-    const { search } = req.query;
+    const { search, page = '1', limit = '10' } = req.query;
+    const xlsx = req.query.format === 'xlsx';
     const where = [];
     const params = [];
     const asOf = locationRequestorFilters(where, params, req.query, 't');
     if (asOf) { where.push('f.date_created <= ?'); params.push(asOf); }
-    if (search) { where.push('(f.fulfillment_no LIKE ? OR t.to_no LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
+    dateRangeFilter(where, params, req.query, 'f.date_created');
+    // One row per item fulfilled, with the same columns as the Saved Item Receipts list
+    // (asked 2026-11-11): the search also reaches the item, its description and the job order.
+    if (search) {
+      where.push('(f.fulfillment_no LIKE ? OR t.to_no LIKE ? OR i.item_code LIKE ? OR i.display_name LIKE ? OR jo.job_order_no LIKE ?)');
+      for (let n = 0; n < 5; n += 1) params.push(`%${search}%`);
+    }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
+    const baseFrom = `FROM item_fulfillment_lines fl
+       JOIN item_fulfillments f ON f.id = fl.item_fulfillment_id
+       JOIN transfer_orders t ON t.id = f.transfer_order_id
+       LEFT JOIN transfer_order_lines tol ON tol.id = fl.transfer_order_line_id
+       LEFT JOIN inventories i ON i.id = fl.item_id
+       LEFT JOIN job_orders jo ON jo.id = COALESCE(tol.job_order_id, t.job_order_id)`;
+    // The count needs the item / job order joins only when the search reads them.
+    const countFrom = search ? baseFrom : `FROM item_fulfillment_lines fl
+       JOIN item_fulfillments f ON f.id = fl.item_fulfillment_id
+       JOIN transfer_orders t ON t.id = f.transfer_order_id`;
+    const [[{ total }]] = await pool.query(`SELECT COUNT(*) AS total ${countFrom} ${whereSql}`, params);
+
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, Number(limit) || 10));
+    const offset = (pageNum - 1) * limitNum;
+
     const [rows] = await pool.query(
-      `SELECT f.id, f.fulfillment_no, f.date_created, f.memo, t.to_no,
+      `SELECT f.id, fl.id AS line_id, f.fulfillment_no, f.date_created, t.to_no, t.date_created AS to_date,
+              -- The TO's memo says which job it is for; the fulfilment's own when the TO has none.
+              COALESCE(NULLIF(t.memo, ''), f.memo) AS memo, jo.job_order_no,
+              i.item_code, i.display_name AS item_name, fl.qty_fulfilled, COALESCE(NULLIF(tol.unit, ''), tol.uom) AS units,
               wf.location_name AS withdraw_from_name, tt.location_name AS transfer_to_name,
               CONCAT(e.first_name, ' ', e.last_name) AS requestor_name
-       FROM item_fulfillments f
-       JOIN transfer_orders t ON t.id = f.transfer_order_id
+       ${baseFrom}
        LEFT JOIN locations wf ON wf.id = t.withdraw_from_location_id
        LEFT JOIN locations tt ON tt.id = t.transfer_to_location_id
        LEFT JOIN employees e ON e.id = t.requestor_id
        ${whereSql}
-       ORDER BY f.id DESC`,
-      params
+       ORDER BY fl.item_fulfillment_id DESC, fl.id
+       ${xlsx ? '' : 'LIMIT ? OFFSET ?'}`,
+      xlsx ? params : [...params, limitNum, offset]
     );
-
-    if (rows.length) {
-      const [lineRows] = await pool.query(
-        'SELECT item_fulfillment_id, qty_fulfilled, received FROM item_fulfillment_lines WHERE item_fulfillment_id IN (?)',
-        [rows.map((r) => r.id)]
-      );
-      const linesByFulfillment = new Map();
-      for (const l of lineRows) {
-        if (!linesByFulfillment.has(l.item_fulfillment_id)) linesByFulfillment.set(l.item_fulfillment_id, []);
-        linesByFulfillment.get(l.item_fulfillment_id).push(l);
-      }
-      for (const r of rows) {
-        const lines = linesByFulfillment.get(r.id) || [];
-        r.status = lines.length && lines.every((l) => Number(l.received || 0) >= Number(l.qty_fulfilled || 0)) ? 'CLOSED' : 'OPEN';
-      }
+    if (xlsx) {
+      await sendXlsx(res, {
+        filename: 'item-fulfillments.xlsx',
+        sheet: 'Item Fulfillments',
+        columns: [
+          { header: 'IF #', key: 'fulfillment_no', width: 14 },
+          { header: 'IF Date', key: 'date', width: 12 },
+          { header: 'TO #', key: 'to_no', width: 14 },
+          { header: 'TO Date', key: 'to_day', width: 12 },
+          { header: 'JO #', key: 'job_order_no', width: 18 },
+          { header: 'Memo', key: 'memo', width: 44 },
+          { header: 'Item', key: 'item_code', width: 36 },
+          { header: 'Description', key: 'item_name', width: 36 },
+          { header: 'Qty', key: 'qty', width: 10 },
+          { header: 'Units', key: 'units', width: 8 },
+          { header: 'From Location', key: 'withdraw_from_name', width: 22 },
+          { header: 'To Location', key: 'transfer_to_name', width: 22 },
+          { header: 'Requestor', key: 'requestor_name', width: 24 },
+        ],
+        rows: rows.map((r) => ({
+          ...r, date: day(r.date_created), to_day: day(r.to_date), memo: r.memo || '', job_order_no: r.job_order_no || '',
+          item_code: r.item_code || '', item_name: r.item_name || '', qty: r.qty_fulfilled == null ? '' : Number(r.qty_fulfilled), units: r.units || '',
+          requestor_name: r.requestor_name || '',
+        })),
+      });
+      return;
     }
-    res.json(rows);
+    res.json({ rows, total, page: pageNum, limit: limitNum });
   } catch (err) {
     next(err);
   }
 });
 
-router.get('/item-receipts', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
+// Paginated for the same reason as the fulfilments list above: 40,584 receipts.
+router.get('/item-receipts', requireAuth, requirePermission(RECEIPT_ROUTE, 'can_view'), async (req, res, next) => {
   try {
-    const { search } = req.query;
+    const { search, page = '1', limit = '10' } = req.query;
+    const xlsx = req.query.format === 'xlsx';
     const where = [];
     const params = [];
     const asOf = locationRequestorFilters(where, params, req.query, 't');
     if (asOf) { where.push('r.date_created <= ?'); params.push(asOf); }
-    if (search) { where.push('(r.receipt_no LIKE ? OR t.to_no LIKE ? OR f.fulfillment_no LIKE ?)'); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+    dateRangeFilter(where, params, req.query, 'r.date_created');
+    // One row per item received (asked 2026-11-10, as the old system lists them): the search also
+    // reaches the item, its description and the job order.
+    if (search) {
+      where.push('(r.receipt_no LIKE ? OR t.to_no LIKE ? OR f.fulfillment_no LIKE ? OR i.item_code LIKE ? OR i.display_name LIKE ? OR jo.job_order_no LIKE ?)');
+      for (let n = 0; n < 6; n += 1) params.push(`%${search}%`);
+    }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-    const [rows] = await pool.query(
-      `SELECT r.id, r.receipt_no, r.date_created, r.memo, t.to_no, f.fulfillment_no,
-              wf.location_name AS withdraw_from_name, tt.location_name AS transfer_to_name,
-              CONCAT(e.first_name, ' ', e.last_name) AS requestor_name
-       FROM item_receipts r
+    const baseFrom = `FROM item_receipt_lines rl
+       JOIN item_receipts r ON r.id = rl.item_receipt_id
        JOIN transfer_orders t ON t.id = r.transfer_order_id
        JOIN item_fulfillments f ON f.id = r.item_fulfillment_id
+       LEFT JOIN transfer_order_lines tol ON tol.id = rl.transfer_order_line_id
+       LEFT JOIN inventories i ON i.id = rl.item_id
+       LEFT JOIN job_orders jo ON jo.id = COALESCE(tol.job_order_id, t.job_order_id)`;
+    // The count needs the item / job order joins only when the search reads them.
+    const countFrom = search ? baseFrom : `FROM item_receipt_lines rl
+       JOIN item_receipts r ON r.id = rl.item_receipt_id
+       JOIN transfer_orders t ON t.id = r.transfer_order_id
+       JOIN item_fulfillments f ON f.id = r.item_fulfillment_id`;
+    const [[{ total }]] = await pool.query(`SELECT COUNT(*) AS total ${countFrom} ${whereSql}`, params);
+
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, Number(limit) || 10));
+    const offset = (pageNum - 1) * limitNum;
+
+    const [rows] = await pool.query(
+      `SELECT r.id, rl.id AS line_id, r.receipt_no, r.date_created, t.to_no, t.date_created AS to_date, f.fulfillment_no,
+              -- The TO's memo says which job it is for; the receipt's own when the TO has none.
+              COALESCE(NULLIF(t.memo, ''), r.memo) AS memo, jo.job_order_no,
+              i.item_code, i.display_name AS item_name, rl.qty_received, COALESCE(NULLIF(tol.unit, ''), tol.uom) AS units,
+              wf.location_name AS withdraw_from_name, tt.location_name AS transfer_to_name,
+              CONCAT(e.first_name, ' ', e.last_name) AS requestor_name
+       ${baseFrom}
        LEFT JOIN locations wf ON wf.id = t.withdraw_from_location_id
        LEFT JOIN locations tt ON tt.id = t.transfer_to_location_id
        LEFT JOIN employees e ON e.id = t.requestor_id
        ${whereSql}
-       ORDER BY r.id DESC`,
-      params
+       ORDER BY rl.item_receipt_id DESC, rl.id
+       ${xlsx ? '' : 'LIMIT ? OFFSET ?'}`,
+      xlsx ? params : [...params, limitNum, offset]
     );
-    res.json(rows);
+    if (xlsx) {
+      await sendXlsx(res, {
+        filename: 'item-receipts.xlsx',
+        sheet: 'Item Receipts',
+        columns: [
+          { header: 'IR #', key: 'receipt_no', width: 14 },
+          { header: 'IR Date', key: 'date', width: 12 },
+          { header: 'TO #', key: 'to_no', width: 14 },
+          { header: 'TO Date', key: 'to_day', width: 12 },
+          { header: 'IF #', key: 'fulfillment_no', width: 14 },
+          { header: 'JO #', key: 'job_order_no', width: 18 },
+          { header: 'Memo', key: 'memo', width: 44 },
+          { header: 'Item', key: 'item_code', width: 36 },
+          { header: 'Description', key: 'item_name', width: 36 },
+          { header: 'Qty', key: 'qty', width: 10 },
+          { header: 'Units', key: 'units', width: 8 },
+          { header: 'From Location', key: 'withdraw_from_name', width: 22 },
+          { header: 'To Location', key: 'transfer_to_name', width: 22 },
+          { header: 'Requestor', key: 'requestor_name', width: 24 },
+        ],
+        rows: rows.map((r) => ({
+          ...r, date: day(r.date_created), to_day: day(r.to_date), memo: r.memo || '', job_order_no: r.job_order_no || '',
+          item_code: r.item_code || '', item_name: r.item_name || '', qty: r.qty_received == null ? '' : Number(r.qty_received), units: r.units || '',
+          requestor_name: r.requestor_name || '',
+        })),
+      });
+      return;
+    }
+    res.json({ rows, total, page: pageNum, limit: limitNum });
   } catch (err) {
     next(err);
   }
+});
+
+// The Add/Update form's pickers -- Requestor and Add Material -- under this page's own permission.
+// The form used to read GET /employees and GET /inventory, which answer only to the Employees and
+// Inventory pages: a storekeeper granted Transfer Orders but not those (Dave Delerio) had the form
+// fail to load at all, so could not raise a TO. Only the fields the form shows are sent.
+router.get('/form-meta', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
+  try {
+    const [employees] = await pool.query(
+      `SELECT e.id, e.first_name, e.last_name, e.position_title FROM employees e ORDER BY e.id DESC`
+    );
+    // Active items only, as the shared item picker serves them for data entry.
+    const [items] = await pool.query(
+      `SELECT i.id, i.item_code, i.display_name, u.title AS base_unit_title, su.title AS stock_unit_title
+         FROM inventories i
+         LEFT JOIN units_of_measure u ON u.id = i.base_unit_id
+         LEFT JOIN units_of_measure su ON su.id = i.stock_unit_id
+        WHERE i.is_active = 1
+        ORDER BY i.id DESC`
+    );
+    res.json({ employees, items });
+  } catch (err) { next(err); }
 });
 
 router.get('/:id', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
@@ -221,7 +440,7 @@ router.get('/:id', requireAuth, requirePermission(ROUTE, 'can_view'), async (req
     if (!row) return res.status(404).json({ error: 'Not found' });
 
     const [lines] = await pool.query(`${LINE_SELECT} WHERE l.transfer_order_id = ? ORDER BY l.line_no`, [req.params.id]);
-    res.json({ ...row, lines });
+    res.json({ ...row, lines: await withLiveOnHand(pool, lines) });
   } catch (err) {
     next(err);
   }
@@ -256,7 +475,7 @@ router.get('/:id/item-fulfillments', requireAuth, requirePermission(ROUTE, 'can_
 // To's), not Withdraw From's, since this document's own numbers (Fulfill/Received) are
 // about what's landed (or about to land) there -- matches how Item Receipt's view shows
 // the identical figure for the same items.
-router.get('/item-fulfillments/:fulfillmentId', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
+router.get('/item-fulfillments/:fulfillmentId', requireAuth, requirePermission(FULFILLMENT_ROUTE, 'can_view'), async (req, res, next) => {
   try {
     const [[f]] = await pool.query(
       `SELECT f.*, u.display_name AS created_by_name,
@@ -293,7 +512,9 @@ router.get('/item-fulfillments/:fulfillmentId', requireAuth, requirePermission(R
   }
 });
 
-router.get('/item-fulfillments/:fulfillmentId/item-receipts', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
+// Serves the Related Records panel on the Item Fulfillment view, so it is gated on the
+// fulfillment's own can_view rather than the receipt's -- same reasoning as the TO panel above.
+router.get('/item-fulfillments/:fulfillmentId/item-receipts', requireAuth, requirePermission(FULFILLMENT_ROUTE, 'can_view'), async (req, res, next) => {
   try {
     const [rows] = await pool.query(
       `SELECT r.*, u.display_name AS created_by_name FROM item_receipts r
@@ -311,7 +532,7 @@ router.get('/item-fulfillments/:fulfillmentId/item-receipts', requireAuth, requi
 // saving one is what actually lands stock at Transfer To. Always raised against one
 // specific Item Fulfillment batch (never the Transfer Order directly), since a line can
 // be fulfilled across several batches and each is received independently.
-router.post('/item-fulfillments/:fulfillmentId/item-receipts', requireAuth, requirePermission(ROUTE, 'can_approve'), async (req, res, next) => {
+router.post('/item-fulfillments/:fulfillmentId/item-receipts', requireAuth, requirePermission(RECEIPT_ROUTE, 'can_add'), async (req, res, next) => {
   const conn = await pool.getConnection();
   try {
     const [[f]] = await conn.query(
@@ -346,13 +567,16 @@ router.post('/item-fulfillments/:fulfillmentId/item-receipts', requireAuth, requ
     }
 
     await conn.beginTransaction();
-    const [result] = await conn.query(
-      `INSERT INTO item_receipts (receipt_no, transfer_order_id, item_fulfillment_id, date_created, memo, created_by_user_id)
-       VALUES ('', ?, ?, ?, ?, ?)`,
-      [f.transfer_order_id, req.params.fulfillmentId, dateCreated || new Date().toISOString().slice(0, 10), memo || null, req.user.id]
-    );
-    const receiptId = result.insertId;
-    await conn.query('UPDATE item_receipts SET receipt_no = ? WHERE id = ?', [`IR-${receiptId}`, receiptId]);
+    const { id: receiptId } = await insertNumbered(conn, {
+      table: 'item_receipts',
+      column: 'receipt_no',
+      prefix: 'IR-',
+      run: (no) => conn.query(
+        `INSERT INTO item_receipts (receipt_no, transfer_order_id, item_fulfillment_id, date_created, memo, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [no, f.transfer_order_id, req.params.fulfillmentId, dateCreated || new Date().toISOString().slice(0, 10), memo || null, req.user.id]
+      ),
+    });
 
     for (const s of submitted) {
       const line = byId.get(Number(s.item_fulfillment_line_id));
@@ -401,7 +625,7 @@ router.post('/item-fulfillments/:fulfillmentId/item-receipts', requireAuth, requ
 // Item Fulfillment line's running totals (not just this one receipt's own qty), so the
 // document reads as a status snapshot, not just a transaction amount -- matching how the
 // real screen shows the exact same figures here as on the Item Fulfillment it closes.
-router.get('/item-receipts/:receiptId', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
+router.get('/item-receipts/:receiptId', requireAuth, requirePermission(RECEIPT_ROUTE, 'can_view'), async (req, res, next) => {
   try {
     const [[r]] = await pool.query(
       `SELECT r.*, u.display_name AS created_by_name,
@@ -461,12 +685,31 @@ router.get('/lines/:lineId/reallocate', requireAuth, requirePermission(ROUTE, 'c
       return res.status(409).json({ error: 'This is a Service item -- it holds no stock, so there is nothing to reallocate. It can be fulfilled directly.' });
     }
 
-    const [[item]] = await pool.query('SELECT id, item_code, display_name FROM inventories WHERE id = ?', [line.item_id]);
-    const [[location]] = await pool.query('SELECT id, location_name FROM locations WHERE id = ?', [line.withdraw_from_location_id]);
-    const [[stock]] = await pool.query(
-      'SELECT qty_on_hand, qty_committed FROM inventory_locations WHERE inventory_id = ? AND location_id = ?',
-      [line.item_id, line.withdraw_from_location_id]
+    const [[item]] = await pool.query(
+      `SELECT i.id, i.item_code, i.display_name, i.conversion_factor,
+              su.title AS stock_unit_title, bu.title AS base_unit_title
+         FROM inventories i
+         LEFT JOIN units_of_measure su ON su.id = i.stock_unit_id
+         LEFT JOIN units_of_measure bu ON bu.id = i.base_unit_id
+        WHERE i.id = ?`,
+      [line.item_id]
     );
+    const [[location]] = await pool.query('SELECT id, location_name FROM locations WHERE id = ?', [line.withdraw_from_location_id]);
+    // On Hand comes from the MOVEMENT LEDGER, not inventory_locations.
+    //
+    // That snapshot table holds 21 rows for 8,346 item/location pairs the ledger knows about, and
+    // not one of them agrees with it. For this item at Warehouse - Central it read 160 while the
+    // Bin Card showed 447.999 -- the 160 being whatever the last approved adjustment happened to
+    // set it to. Reallocating against a figure the Bin Card contradicts is how someone commits
+    // stock that is not there, or refuses to commit stock that is.
+    //
+    // deriveOnHand anchors exactly as the Bin Card does (the source system's Beginning Balance plus
+    // the movements since), so this screen and that report cannot disagree.
+    //
+    // qty_committed is not in the ledger either (a commitment is a promise, not a movement); it is
+    // summed from the candidate lines below.
+    const onHandByPair = await deriveOnHand(pool, [line.item_id]);
+    const qtyOnHandBase = Number(onHandByPair.get(`${line.item_id}|${line.withdraw_from_location_id}`) || 0);
 
     const [candidates] = await pool.query(
       `SELECT tol.id AS transfer_order_line_id, tol.qty, tol.adjusted_qty, tol.fulfilled, tol.committed, tol.uom, tol.unit,
@@ -478,10 +721,18 @@ router.get('/lines/:lineId/reallocate', requireAuth, requirePermission(ROUTE, 'c
       [line.item_id, line.withdraw_from_location_id, OPEN_TO_STATUSES]
     );
 
+    // Both figures are in BASE units; the conversion factor goes with them so the screen can show
+    // the Stock Unit column as something other than a copy of the Base Unit one, which is what it
+    // had been displaying.
     res.json({
       item, location,
-      qty_on_hand: Number(stock?.qty_on_hand || 0),
-      qty_committed: Number(stock?.qty_committed || 0),
+      qty_on_hand: qtyOnHandBase,
+      // The open lines' own commitments -- what Submit totals against on hand. The inventory_locations
+      // snapshot has no row for most pairs, so it showed 0 committed beside three orders holding 3.
+      qty_committed: Number(candidates.reduce((s, c) => s + Number(c.committed || 0), 0).toFixed(4)),
+      conversion_factor: Number(item?.conversion_factor) || 1,
+      stock_unit_title: item?.stock_unit_title || null,
+      base_unit_title: item?.base_unit_title || null,
       triggering_line_id: Number(req.params.lineId),
       candidates,
     });
@@ -510,10 +761,12 @@ router.post('/lines/:lineId/reallocate', requireAuth, requirePermission(ROUTE, '
 
     // Every submitted line must genuinely belong to this same item+location pool --
     // otherwise stock earmarked for one item could get reassigned to an unrelated one.
+    // Newest first: the order the release below takes stock back in.
     const [poolLines] = await conn.query(
-      `SELECT tol.id, tol.qty, tol.adjusted_qty, tol.committed FROM transfer_order_lines tol
+      `SELECT tol.id, tol.qty, tol.adjusted_qty, tol.committed, tol.fulfilled, t.to_no FROM transfer_order_lines tol
        JOIN transfer_orders t ON t.id = tol.transfer_order_id
-       WHERE tol.item_id = ? AND t.withdraw_from_location_id = ? AND t.status IN (?)`,
+       WHERE tol.item_id = ? AND t.withdraw_from_location_id = ? AND t.status IN (?)
+       ORDER BY t.date_created DESC, t.id DESC, tol.id DESC`,
       [line.item_id, line.withdraw_from_location_id, OPEN_TO_STATUSES]
     );
     const poolById = new Map(poolLines.map((l) => [l.id, l]));
@@ -522,30 +775,51 @@ router.post('/lines/:lineId/reallocate', requireAuth, requirePermission(ROUTE, '
       const target = poolById.get(Number(s.transfer_order_line_id));
       if (!target) return res.status(400).json({ error: 'One of the selected orders is no longer eligible.' });
       const committedQty = Number(s.committed);
-      const cap = Number(target.adjusted_qty ?? target.qty);
+      // Capped at what the line has LEFT to fulfil, not at what it originally ordered. Reserving
+      // against the full ordered qty let stock be committed that could never be shipped: this
+      // line ordered 3,817.0233 with 192 already gone, so a reservation of 3,626 sat 0.9767 above
+      // the 3,625.0233 still outstanding and fulfilment refused it every time -- a dead end, since
+      // Reallocate was the screen that had just accepted it.
+      const cap = Number(target.adjusted_qty ?? target.qty) - Number(target.fulfilled || 0);
       if (!(committedQty >= 0) || committedQty > cap) {
-        return res.status(409).json({ error: `Committed qty can't exceed that order's own ordered qty (${cap}).` });
+        return res.status(409).json({ error: `Committed qty can't exceed what that order still has to fulfill (${cap}).` });
       }
     }
 
-    const [[stock]] = await conn.query(
-      'SELECT qty_on_hand FROM inventory_locations WHERE inventory_id = ? AND location_id = ?',
-      [line.item_id, line.withdraw_from_location_id]
-    );
-    const onHand = Number(stock?.qty_on_hand || 0);
+    // Derived from the ledger, exactly as the GET above derives the figure it SHOWS. When this
+    // check read inventory_locations instead, the screen offered 3,756 square feet on hand and
+    // then refused a commitment of 3,626 for exceeding 3,500 -- the stale snapshot -- which reads
+    // as the form calling itself a liar. Whatever the user is shown has to be what they are held
+    // to.
+    const onHandByPair = await deriveOnHand(conn, [line.item_id]);
+    const onHand = Number(onHandByPair.get(`${line.item_id}|${line.withdraw_from_location_id}`) || 0);
 
     const submittedById = new Map(submitted.map((s) => [Number(s.transfer_order_line_id), Number(s.committed)]));
-    let newTotal = 0;
-    for (const l of poolLines) {
-      newTotal += submittedById.has(l.id) ? submittedById.get(l.id) : Number(l.committed || 0);
+    const round4 = (n) => Number(n.toFixed(4));
+    // The ticked orders alone may not ask for more than is on hand -- nothing can be freed for that.
+    const tickedTotal = round4([...submittedById.values()].reduce((s, q) => s + q, 0));
+    if (tickedTotal > onHand) {
+      return res.status(409).json({ error: `The ticked orders ask for ${tickedTotal}, more than is on hand at this location (${onHand}).` });
     }
-    if (newTotal > onHand) {
-      return res.status(409).json({ error: `Total committed (${newTotal}) can't exceed what's on hand at this location (${onHand}).` });
+    // Reallocating MOVES a commitment (asked 2026-10-05): what the ticked orders need beyond the stock
+    // still free is taken back from the unticked orders holding it, newest order first, so the oldest
+    // keep their place in line. Unticked orders are otherwise left as they are.
+    let newTotal = round4(poolLines.reduce((s, l) => s + (submittedById.has(l.id) ? submittedById.get(l.id) : Number(l.committed || 0)), 0));
+    const released = [];
+    for (const l of poolLines) {
+      if (newTotal <= onHand) break;
+      if (submittedById.has(l.id) || !(Number(l.committed) > 0)) continue;
+      const take = Math.min(Number(l.committed), round4(newTotal - onHand));
+      released.push({ id: l.id, to_no: l.to_no, from: Number(l.committed), to: round4(Number(l.committed) - take) });
+      newTotal = round4(newTotal - take);
     }
 
     await conn.beginTransaction();
     for (const [lineId, committedQty] of submittedById) {
       await conn.query('UPDATE transfer_order_lines SET committed = ? WHERE id = ?', [committedQty, lineId]);
+    }
+    for (const r of released) {
+      await conn.query('UPDATE transfer_order_lines SET committed = ? WHERE id = ?', [r.to, r.id]);
     }
     await conn.query(
       `INSERT INTO inventory_locations (inventory_id, location_id, qty_committed)
@@ -555,7 +829,7 @@ router.post('/lines/:lineId/reallocate', requireAuth, requirePermission(ROUTE, '
     );
     await conn.commit();
 
-    res.json({ ok: true, qty_committed: newTotal });
+    res.json({ ok: true, qty_committed: newTotal, released: released.map(({ to_no, from, to }) => ({ to_no, from, to })) });
   } catch (err) {
     await conn.rollback();
     next(err);
@@ -579,6 +853,37 @@ router.get('/:id/audit-logs', requireAuth, requirePermission(ROUTE, 'can_view'),
   }
 });
 
+// The next document number, taken from the numbers actually in use -- same shape as nextReworkNo
+// in lib/reworkJobOrder.js.
+//
+// All three documents in this file used to be numbered <PREFIX>-<insertId>, which quietly assumes
+// a row's number equals its row id. That is true of a database this app filled itself, and of no
+// other. On production, 38,185 of 38,190 transfer orders, 40,994 of 41,001 fulfilments and 40,578
+// of 40,584 receipts were imported carrying their original numbers while their ids were
+// reassigned -- so TO-38206 belongs to row 23463. Once AUTO_INCREMENT climbed into the range those
+// imported numbers occupy, every create became a coin toss, and "Duplicate entry 'TO-38206' for
+// key 'transfer_orders.to_no'" is that coin landing badly. Fulfilments and receipts were the same
+// bug a few hundred rows behind: their next ids were already inside their used ranges.
+// Read on the POOL, not on the caller's connection, and deliberately so.
+//
+// The caller is inside a transaction, and InnoDB's default REPEATABLE READ pins that transaction
+// to the snapshot of its first read. So when two creates race, the loser's retry re-reads its own
+// stale snapshot, cannot see the row the winner just committed, computes the same number again,
+// and fails on every attempt. A separate autocommit connection sees the current committed state,
+// which is what "the next free number" has to mean.
+// Both helpers now live in lib/docNumber.js. Purchase orders turned out to have exactly this
+// collision -- PO-19571 held by row 438, with 498 more queued behind it -- so the fix is shared
+// rather than copied a second time.
+
+// Insert a row whose document number has to be unique, and write that number in the INSERT
+// itself.
+//
+// The old two-step inserted '' and then UPDATEd the number in. These columns are UNIQUE, so two
+// people creating at the same moment collided on the empty string before either had a number at
+// all. Reading the maximum and inserting still is not atomic, so a clash is retried rather than
+// prevented: the loser simply takes the next number. A duplicate-key error does not abort a MySQL
+// transaction, so the retry is safe inside the caller's.
+
 // Creates the TO header plus one line per material passed in `lines` -- this is how the
 // Production module's "Create TO" button (only shown when a Job Order has short
 // materials) pre-fills the form with exactly the items that are actually short, in one
@@ -596,35 +901,52 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
     }
     await assertPeriodOpen(dateCreated, 'non_gl', conn);
 
-    await conn.beginTransaction();
-    const [result] = await conn.query(
-      `INSERT INTO transfer_orders
-         (to_no, date_created, date_needed, withdraw_from_location_id, transfer_to_location_id, requestor_id, job_order_id, memo, created_by_user_id)
-       VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [dateCreated || new Date().toISOString().slice(0, 10), dateNeeded || null, withdrawFromId, transferToId, requestorId || null, jobOrderId || null, memo || null, req.user.id]
-    );
-    const toId = result.insertId;
-    await conn.query('UPDATE transfer_orders SET to_no = ? WHERE id = ?', [`TO-${toId}`, toId]);
-    await logAudit(conn, { toId, userId: req.user.id, eventType: 'Created', fieldName: 'to_no', newValue: `TO-${toId}` });
+    // The Requestor is the person raising it unless the form says otherwise -- the form defaults
+    // it the same way, this covers a caller that leaves it out.
+    let requestor = requestorId || null;
+    if (!requestor) {
+      const [[me]] = await conn.query('SELECT employee_id FROM users WHERE id = ?', [req.user.id]);
+      requestor = me?.employee_id || null;
+    }
 
+    await conn.beginTransaction();
+
+    const { id: toId, no: toNo } = await insertNumbered(conn, {
+      table: 'transfer_orders',
+      column: 'to_no',
+      prefix: 'TO-',
+      run: (no) => conn.query(
+        `INSERT INTO transfer_orders
+           (to_no, date_created, date_needed, withdraw_from_location_id, transfer_to_location_id, requestor_id, job_order_id, memo, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [no, dateCreated || new Date().toISOString().slice(0, 10), dateNeeded || null, withdrawFromId, transferToId, requestor, jobOrderId || null, memo || null, req.user.id]
+      ),
+    });
+    await logAudit(conn, { toId, userId: req.user.id, eventType: 'Created', fieldName: 'to_no', newValue: toNo });
+
+    // The stored qty_on_hand is a creation-time record in Base Unit, taken from the Bin Card
+    // figure rather than the inventory_locations table it used to copy.
+    const lineList = Array.isArray(lines) ? lines : [];
+    const onHandAtCreate = await deriveOnHand(conn, lineList.map((l) => l.item_id).filter(Boolean));
     let lineNo = 1;
-    for (const line of (Array.isArray(lines) ? lines : [])) {
+    for (const line of lineList) {
       if (!line.item_id || !line.qty) continue;
-      const [[stock]] = await conn.query(
-        'SELECT qty_on_hand FROM inventory_locations WHERE inventory_id = ? AND location_id = ?',
-        [line.item_id, withdrawFromId]
-      );
+      const stock = { qty_on_hand: onHandAtCreate.get(`${line.item_id}|${withdrawFromId}`) };
       const [[{ toCount }]] = await conn.query(
         'SELECT COUNT(*) + 1 AS toCount FROM transfer_order_lines WHERE job_order_process_id = ?',
         [line.job_order_process_id || 0]
       );
+      // Unit Used, when the Add form chose one, is resolved exactly as POST /:id/lines does it, so a
+      // material added before the first save ends up the same as one added after.
+      const unitUsed = line.unit_used == null || line.unit_used === '' ? null : normaliseUnitUsed(line.unit_used);
+      const unitTitle = unitUsed ? await unitTitleFor(conn, line.item_id, unitUsed) : (line.unit || null);
       await conn.query(
         `INSERT INTO transfer_order_lines
-           (transfer_order_id, line_no, item_id, job_order_id, job_order_process_id, to_count, qty, uom, unit, back_ordered, committed, qty_on_hand, memo)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (transfer_order_id, line_no, item_id, job_order_id, job_order_process_id, to_count, qty, uom, unit, unit_used, back_ordered, committed, qty_on_hand, memo)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           toId, lineNo++, line.item_id, jobOrderId || null, line.job_order_process_id || null,
-          line.job_order_process_id ? toCount : 1, line.qty, line.uom || null, line.unit || null,
+          line.job_order_process_id ? toCount : 1, line.qty, line.uom || null, unitTitle, unitUsed,
           line.back_ordered || 0, line.committed || 0, Number(stock?.qty_on_hand || 0), line.memo || null,
         ]
       );
@@ -641,17 +963,67 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
   }
 });
 
-router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
+// Editing a TO's header and materials: can_edit on Transfer Orders, OR the person who created it
+// (with can_add) while nothing is fulfilled yet. Raising a TO includes filling in its materials --
+// without this, someone who may create TOs but not edit others' (Joel Taboada, 2026-10-01) could
+// save the header but never add a single material to it.
+// Editing a Transfer Order -- its header and its lines -- is a System Admin's alone, at any status
+// (asked 2026-10-19; until then Can Edit, or its creator, edited one still Pending Fulfillment).
+// ...except its own requestor (2026-10-19): the person who raised it, or the employee named as its
+// Requestor, may edit it while it is still Pending Fulfillment -- nothing has moved yet.
+async function isOwnPendingTo(userId, toId) {
+  const [[t]] = await pool.query('SELECT created_by_user_id, requestor_id, status FROM transfer_orders WHERE id = ?', [toId]);
+  if (!t || t.status !== 'pending_fulfillment') return false;
+  if (Number(t.created_by_user_id) === Number(userId)) return true;
+  if (!t.requestor_id) return false;
+  const [[u]] = await pool.query('SELECT employee_id FROM users WHERE id = ?', [userId]);
+  return !!u?.employee_id && Number(u.employee_id) === Number(t.requestor_id);
+}
+async function requireToEdit(req, res, next) {
   try {
-    const [[t]] = await pool.query('SELECT status, date_created FROM transfer_orders WHERE id = ?', [req.params.id]);
+    if (await isSystemAdmin(req.user.id)) return next();
+    if (await userCan(req.user.id, ROUTE, 'can_view') && await isOwnPendingTo(req.user.id, req.params.id)) return next();
+    return res.status(403).json({ error: 'Only a System Admin can edit a transfer order -- or its requestor, while it is still Pending Fulfillment.' });
+  } catch (err) { return next(err); }
+}
+
+// The warehouse's two fields on a line -- Unit Used and Adjusted Qty -- are part of fulfilling, not
+// editing the order (2026-10-19: Jumar Gidacan lost them when editing went System Admin only). Anyone
+// with Can Edit on Transfer Orders or Can Add on Item Fulfillments may change those two, and only
+// those, while it is still Pending Fulfillment -- once anything is fulfilled, a System Admin only.
+const WAREHOUSE_LINE_FIELDS = ['unit_used', 'adjusted_qty'];
+async function requireToLineEdit(req, res, next) {
+  try {
+    if (await isSystemAdmin(req.user.id)) return next();
+    // Its requestor, while Pending Fulfillment, edits any field of its lines (requireToEdit).
+    if (await userCan(req.user.id, ROUTE, 'can_view') && await isOwnPendingTo(req.user.id, req.params.id)) return next();
+    const keys = Object.keys(req.body || {}).filter((k) => req.body[k] !== undefined);
+    const warehouseOnly = keys.length > 0 && keys.every((k) => WAREHOUSE_LINE_FIELDS.includes(k));
+    if (warehouseOnly && (await userCan(req.user.id, ROUTE, 'can_edit') || await userCan(req.user.id, FULFILLMENT_ROUTE, 'can_add'))) {
+      const [[t]] = await pool.query('SELECT status FROM transfer_orders WHERE id = ?', [req.params.id]);
+      if (t && t.status === 'pending_fulfillment') return next();
+      return res.status(409).json({ error: 'This transfer order has been fulfilled already -- only a System Admin can change it now.' });
+    }
+    return res.status(403).json({ error: 'Only a System Admin can edit a transfer order -- Unit Used and Adjusted Qty excepted.' });
+  } catch (err) { return next(err); }
+}
+
+router.put('/:id', requireAuth, requireToEdit, async (req, res, next) => {
+  try {
+    const [[t]] = await pool.query('SELECT status, date_created, withdraw_from_location_id, transfer_to_location_id FROM transfer_orders WHERE id = ?', [req.params.id]);
     if (!t) return res.status(404).json({ error: 'Not found' });
-    if (t.status !== 'pending_fulfillment') return res.status(409).json({ error: 'Only a transfer order with nothing fulfilled yet can be edited.' });
 
     const {
       date_created: dateCreated, date_needed: dateNeeded,
       withdraw_from_location_id: withdrawFromId, transfer_to_location_id: transferToId,
       requestor_id: requestorId, memo,
     } = req.body;
+    // Once anything is fulfilled the stock has moved out of Withdraw From toward Transfer To, so the
+    // two locations stay as they are; a System Admin edits the rest.
+    if (t.status !== 'pending_fulfillment'
+      && (Number(withdrawFromId) !== Number(t.withdraw_from_location_id) || Number(transferToId) !== Number(t.transfer_to_location_id))) {
+      return res.status(409).json({ error: 'Withdraw From and Transfer To cannot change once the transfer order has been fulfilled.' });
+    }
     // Both dates: you can't edit out of a closed period, nor move a document into one.
     await assertPeriodOpen([t.date_created, dateCreated], 'non_gl');
     await pool.query(
@@ -666,34 +1038,37 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
   }
 });
 
-router.post('/:id/lines', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
+router.post('/:id/lines', requireAuth, requireToEdit, async (req, res, next) => {
   const conn = await pool.getConnection();
   try {
     const [[t]] = await conn.query('SELECT status, date_created, withdraw_from_location_id, job_order_id FROM transfer_orders WHERE id = ?', [req.params.id]);
     if (!t) return res.status(404).json({ error: 'Not found' });
-    if (t.status !== 'pending_fulfillment') return res.status(409).json({ error: 'Only a transfer order with nothing fulfilled yet can be edited.' });
     await assertPeriodOpen(t.date_created, 'non_gl', conn);
 
-    const { item_id: itemId, qty, uom, unit, memo } = req.body;
+    const { item_id: itemId, qty, uom, unit, unit_used: unitUsedIn, memo } = req.body;
     if (!itemId || !qty) return res.status(400).json({ error: 'Item and Qty are required.' });
 
     await conn.beginTransaction();
-    const [[stock]] = await conn.query(
-      'SELECT qty_on_hand FROM inventory_locations WHERE inventory_id = ? AND location_id = ?',
-      [itemId, t.withdraw_from_location_id]
-    );
+    // Only stored when the caller actually chose one. Left NULL the line keeps whatever unit it
+    // was added with (Add Material sends the base unit) and the screen resolves the dropdown from
+    // that -- see UNIT_USED_RESOLVED.
+    const unitUsed = unitUsedIn == null || unitUsedIn === '' ? null : normaliseUnitUsed(unitUsedIn);
+    const unitTitle = unitUsed ? await unitTitleFor(conn, itemId, unitUsed) : (unit || null);
+    const onHandAtAdd = await deriveOnHand(conn, [itemId]);
+    const stock = { qty_on_hand: onHandAtAdd.get(`${itemId}|${t.withdraw_from_location_id}`) };
     const [[{ nextLine }]] = await conn.query(
       'SELECT COALESCE(MAX(line_no), 0) + 1 AS nextLine FROM transfer_order_lines WHERE transfer_order_id = ?',
       [req.params.id]
     );
     const [result] = await conn.query(
-      `INSERT INTO transfer_order_lines (transfer_order_id, line_no, item_id, job_order_id, qty, uom, unit, qty_on_hand, memo)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [req.params.id, nextLine, itemId, t.job_order_id, qty, uom || null, unit || null, Number(stock?.qty_on_hand || 0), memo || null]
+      `INSERT INTO transfer_order_lines (transfer_order_id, line_no, item_id, job_order_id, qty, uom, unit, unit_used, qty_on_hand, memo)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.params.id, nextLine, itemId, t.job_order_id, qty, uom || null, unitTitle, unitUsed, Number(stock?.qty_on_hand || 0), memo || null]
     );
     await conn.commit();
 
     const [[row]] = await pool.query(`${LINE_SELECT} WHERE l.id = ?`, [result.insertId]);
+    await withLiveOnHand(pool, [row]);
     res.status(201).json(row);
   } catch (err) {
     await conn.rollback();
@@ -703,33 +1078,65 @@ router.post('/:id/lines', requireAuth, requirePermission(ROUTE, 'can_edit'), asy
   }
 });
 
-router.put('/:id/lines/:lineId', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
+router.put('/:id/lines/:lineId', requireAuth, requireToLineEdit, async (req, res, next) => {
   try {
     const [[t]] = await pool.query('SELECT status, date_created FROM transfer_orders WHERE id = ?', [req.params.id]);
     if (!t) return res.status(404).json({ error: 'Not found' });
-    if (t.status !== 'pending_fulfillment') return res.status(409).json({ error: 'Only a transfer order with nothing fulfilled yet can be edited.' });
     await assertPeriodOpen(t.date_created, 'non_gl');
 
-    const { qty, adjusted_qty: adjustedQty, memo } = req.body;
+    const [[line]] = await pool.query(
+      'SELECT item_id, qty, adjusted_qty, unit, unit_used, memo, fulfilled FROM transfer_order_lines WHERE id = ? AND transfer_order_id = ?',
+      [req.params.lineId, req.params.id]
+    );
+    if (!line) return res.status(404).json({ error: 'Line not found' });
+
+    // Only fields actually present in the request change; everything else keeps what is stored.
+    // The screens commit one field at a time -- Unit Used fires on change, Qty and Memo on blur --
+    // so treating an absent field as "reset it" let a Unit Used pick a moment earlier be wiped by
+    // the blur that followed it. Same reasoning as inventoryAdjustments.js's PUT.
+    const has = (k) => req.body[k] !== undefined;
+    const qty = has('qty') ? req.body.qty : line.qty;
+    const adjustedQty = has('adjusted_qty')
+      ? (req.body.adjusted_qty === '' || req.body.adjusted_qty === null ? null : req.body.adjusted_qty)
+      : line.adjusted_qty;
+    const memo = has('memo') ? (req.body.memo || null) : line.memo;
+    // What has already been fulfilled off this line cannot be un-asked for.
+    const target = adjustedQty != null && adjustedQty !== '' ? Number(adjustedQty) : Number(qty);
+    if (Number(line.fulfilled || 0) > 0 && target < Number(line.fulfilled) - 1e-9) {
+      return res.status(409).json({ error: `This line has ${Number(line.fulfilled)} fulfilled already; its quantity cannot go below that.` });
+    }
+
+    // Picking a unit is what rewrites `unit`; it is never recomputed from a stored unit_used,
+    // so the 65,933 lines that predate the toggle keep the unit they were migrated with even
+    // while some other field on them is edited.
+    let unitUsed = line.unit_used;
+    let unit = line.unit;
+    if (has('unit_used') && req.body.unit_used !== null && req.body.unit_used !== '') {
+      unitUsed = normaliseUnitUsed(req.body.unit_used);
+      unit = (await unitTitleFor(pool, line.item_id, unitUsed)) ?? line.unit;
+    }
+
     await pool.query(
-      'UPDATE transfer_order_lines SET qty = ?, adjusted_qty = ?, memo = ? WHERE id = ? AND transfer_order_id = ?',
-      [qty, adjustedQty === '' ? null : adjustedQty, memo || null, req.params.lineId, req.params.id]
+      'UPDATE transfer_order_lines SET qty = ?, adjusted_qty = ?, memo = ?, unit = ?, unit_used = ? WHERE id = ? AND transfer_order_id = ?',
+      [qty, adjustedQty, memo, unit, unitUsed, req.params.lineId, req.params.id]
     );
     const [[row]] = await pool.query(`${LINE_SELECT} WHERE l.id = ?`, [req.params.lineId]);
     if (!row) return res.status(404).json({ error: 'Line not found' });
+    await withLiveOnHand(pool, [row]);
     res.json(row);
   } catch (err) {
     next(err);
   }
 });
 
-router.delete('/:id/lines/:lineId', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
+router.delete('/:id/lines/:lineId', requireAuth, requireToEdit, async (req, res, next) => {
   try {
     const [[t]] = await pool.query('SELECT status, date_created FROM transfer_orders WHERE id = ?', [req.params.id]);
     if (!t) return res.status(404).json({ error: 'Not found' });
-    if (t.status !== 'pending_fulfillment') return res.status(409).json({ error: 'Only a transfer order with nothing fulfilled yet can be edited.' });
     await assertPeriodOpen(t.date_created, 'non_gl');
 
+    const [[dl]] = await pool.query('SELECT fulfilled FROM transfer_order_lines WHERE id = ? AND transfer_order_id = ?', [req.params.lineId, req.params.id]);
+    if (dl && Number(dl.fulfilled || 0) > 0) return res.status(409).json({ error: 'This line has already been fulfilled, so it cannot be removed.' });
     await pool.query('DELETE FROM transfer_order_lines WHERE id = ? AND transfer_order_id = ?', [req.params.lineId, req.params.id]);
     res.status(204).send();
   } catch (err) {
@@ -745,7 +1152,7 @@ router.delete('/:id/lines/:lineId', requireAuth, requirePermission(ROUTE, 'can_e
 // transactions -- `fulfilled` is a running total capped at that line's own qty (or
 // Adjusted Qty, if the requestor tweaked it). The Transfer Order only flips to
 // "fulfilled" once every line's running total has caught all the way up.
-router.post('/:id/item-fulfillments', requireAuth, requirePermission(ROUTE, 'can_approve'), async (req, res, next) => {
+router.post('/:id/item-fulfillments', requireAuth, requirePermission(FULFILLMENT_ROUTE, 'can_add'), async (req, res, next) => {
   const conn = await pool.getConnection();
   try {
     const [[t]] = await conn.query(
@@ -789,28 +1196,41 @@ router.post('/:id/item-fulfillments', requireAuth, requirePermission(ROUTE, 'can
       // line's reserved share of a pool that other pending Transfer Order lines may
       // also be claiming (see /lines/:lineId/reallocate). A freshly-raised line sits at
       // Committed 0 until someone reallocates stock to it.
-      const committedRemaining = Number(line.committed || 0) - Number(line.fulfilled || 0);
+      // `committed` is what is still reserved and unshipped -- it is decremented as each
+      // fulfilment goes out -- so it IS the cap, with no further subtraction. Taking
+      // `committed - fulfilled` double-counted any reservation made after a partial shipment:
+      // TO-38243's acrylic was ordered 1,965.2871, shipped 192, then re-reserved at 1,773.2871
+      // (the remainder), and the old arithmetic offered only 1,581.2871 of it.
+      //
+      // Over-fulfilment is still impossible: the ordered-balance gate above caps this at
+      // qty - fulfilled regardless of what `committed` says, which also covers legacy rows left
+      // holding a reservation that was never decremented.
+      const committedRemaining = Number(line.committed || 0);
       if (qtyToFulfill > committedRemaining) {
         return res.status(409).json({ error: `Qty to Fulfill for ${line.item_code} exceeds its committed qty (${committedRemaining} available) -- reallocate stock to this order first.` });
       }
-      const [[stock]] = await conn.query(
-        'SELECT qty_on_hand FROM inventory_locations WHERE inventory_id = ? AND location_id = ?',
-        [line.item_id, t.withdraw_from_location_id]
-      );
-      const available = Number(stock?.qty_on_hand || 0);
+      // From the ledger, because Reallocate now hands out commitments against the ledger figure.
+      // Left on inventory_locations this gate would have contradicted the one before it: stock
+      // could be committed to a line up to the real balance and then refused at fulfilment for
+      // exceeding the stale snapshot, with no way forward from either screen.
+      const onHandByPair = await deriveOnHand(conn, [line.item_id]);
+      const available = Number(onHandByPair.get(`${line.item_id}|${t.withdraw_from_location_id}`) || 0);
       if (qtyToFulfill > available) {
         return res.status(409).json({ error: `Qty to Fulfill for ${line.item_code} exceeds what's on hand at the withdraw-from location (${available}).` });
       }
     }
 
     await conn.beginTransaction();
-    const [result] = await conn.query(
-      `INSERT INTO item_fulfillments (fulfillment_no, transfer_order_id, date_created, memo, created_by_user_id)
-       VALUES ('', ?, ?, ?, ?)`,
-      [req.params.id, dateCreated || new Date().toISOString().slice(0, 10), memo || null, req.user.id]
-    );
-    const fulfillmentId = result.insertId;
-    await conn.query('UPDATE item_fulfillments SET fulfillment_no = ? WHERE id = ?', [`IF-${fulfillmentId}`, fulfillmentId]);
+    const { id: fulfillmentId, no: fulfillmentNo } = await insertNumbered(conn, {
+      table: 'item_fulfillments',
+      column: 'fulfillment_no',
+      prefix: 'IF-',
+      run: (no) => conn.query(
+        `INSERT INTO item_fulfillments (fulfillment_no, transfer_order_id, date_created, memo, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?)`,
+        [no, req.params.id, dateCreated || new Date().toISOString().slice(0, 10), memo || null, req.user.id]
+      ),
+    });
 
     for (const s of submitted) {
       const line = byId.get(Number(s.transfer_order_line_id));
@@ -824,8 +1244,27 @@ router.post('/:id/item-fulfillments', requireAuth, requirePermission(ROUTE, 'can
           'UPDATE inventory_locations SET qty_on_hand = qty_on_hand - ? WHERE inventory_id = ? AND location_id = ?',
           [qtyToFulfill, line.item_id, t.withdraw_from_location_id]
         );
+        // Shipping a reservation CONSUMES it, so the location's reserved pool frees up by the
+        // same amount. Without this the pool stayed reserved against stock that had already
+        // left the building, and every later reallocation of that item started from an
+        // overstated committed figure.
+        await conn.query(
+          `UPDATE inventory_locations SET qty_committed = GREATEST(COALESCE(qty_committed, 0) - ?, 0)
+            WHERE inventory_id = ? AND location_id = ?`,
+          [qtyToFulfill, line.item_id, t.withdraw_from_location_id]
+        );
       }
-      await conn.query('UPDATE transfer_order_lines SET fulfilled = fulfilled + ? WHERE id = ?', [qtyToFulfill, line.id]);
+      // committed comes DOWN as fulfilled goes up: it is the quantity still reserved and not yet
+      // shipped, which is what "Committed" means on the Transfer Order and on Reallocate Items.
+      // It used to be left alone, so a line that had been fully shipped still showed its original
+      // reservation and the fulfilment cap had to subtract `fulfilled` from it -- which then
+      // under-counted any reservation made AFTER a partial shipment, because that figure was
+      // already net of it. GREATEST keeps a legacy row that was never decremented from going
+      // negative.
+      await conn.query(
+        'UPDATE transfer_order_lines SET fulfilled = fulfilled + ?, committed = GREATEST(committed - ?, 0) WHERE id = ?',
+        [qtyToFulfill, qtyToFulfill, line.id]
+      );
       await conn.query(
         `INSERT INTO item_fulfillment_lines (item_fulfillment_id, transfer_order_line_id, item_id, qty_fulfilled, memo)
          VALUES (?, ?, ?, ?, ?)`,
@@ -843,7 +1282,7 @@ router.post('/:id/item-fulfillments', requireAuth, requirePermission(ROUTE, 'can
       [newStatus, req.user.id, req.params.id]
     );
     await logAudit(conn, { toId: req.params.id, userId: req.user.id, eventType: 'Status Change', fieldName: 'status', newValue: newStatus });
-    await logAudit(conn, { toId: req.params.id, userId: req.user.id, eventType: 'Created', fieldName: 'fulfillment_no', newValue: `IF-${fulfillmentId}` });
+    await logAudit(conn, { toId: req.params.id, userId: req.user.id, eventType: 'Created', fieldName: 'fulfillment_no', newValue: fulfillmentNo });
     await conn.commit();
 
     const [[row]] = await pool.query('SELECT * FROM item_fulfillments WHERE id = ?', [fulfillmentId]);
@@ -856,15 +1295,26 @@ router.post('/:id/item-fulfillments', requireAuth, requirePermission(ROUTE, 'can
   }
 });
 
-router.put('/:id/cancel', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
+// Cancelling (2026-10-19): a TO not yet fulfilled or only partially fulfilled (CANCELLABLE_TO_STATUSES),
+// by whoever raised it -- everyone may cancel their own -- anyone with Can Edit on Transfer Orders, or
+// a System Admin. Fully fulfilled, received or cancelled: no.
+router.put('/:id/cancel', requireAuth, async (req, res, next) => {
   const conn = await pool.getConnection();
   try {
-    const [[t]] = await conn.query('SELECT status, date_created FROM transfer_orders WHERE id = ?', [req.params.id]);
+    const [[t]] = await conn.query('SELECT status, date_created, created_by_user_id FROM transfer_orders WHERE id = ?', [req.params.id]);
     if (!t) return res.status(404).json({ error: 'Not found' });
-    await assertPeriodOpen(t.date_created, 'non_gl', conn);
-    if (t.status === 'received' || t.status === 'cancelled') {
-      return res.status(409).json({ error: `A transfer order that's already ${t.status === 'received' ? 'Received' : 'Cancelled'} can't be cancelled.` });
+    // Cancellable while nothing, or only part, has been fulfilled (asked 2026-10-19) -- by the person
+    // who raised it, anyone with Can Edit, or a System Admin. Fully fulfilled, received or already
+    // cancelled: no.
+    if (!CANCELLABLE_TO_STATUSES.includes(t.status)) {
+      const why = { pending_receipt: 'fully fulfilled', received: 'received', cancelled: 'cancelled' }[t.status] || t.status;
+      return res.status(409).json({ error: `This transfer order is already ${why} -- only one not yet fulfilled, or partially fulfilled, can be cancelled.` });
     }
+    const own = Number(t.created_by_user_id) === Number(req.user.id);
+    if (!own && !(await userCan(req.user.id, ROUTE, 'can_edit')) && !(await isSystemAdmin(req.user.id))) {
+      return res.status(403).json({ error: 'Only the person who raised this transfer order, or someone with Can Edit, can cancel it.' });
+    }
+    await assertPeriodOpen(t.date_created, 'non_gl', conn);
 
     await conn.beginTransaction();
     await conn.query("UPDATE transfer_orders SET status = 'cancelled', updated_at = NOW() WHERE id = ?", [req.params.id]);

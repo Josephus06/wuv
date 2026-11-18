@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
+import { usePeriodLocked } from '../utils/periodLock';
 import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate, displayAuditTime } from '../utils/dates';
+import { CustomerLink } from '../components/PartyLink';
 
 function money(v) { const n = Number(v); return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'; }
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : ''; }
+function formatDate(v) { return v ? displayDate(v) : ''; }
 
 export default function DepositView() {
   const { id } = useParams();
@@ -32,11 +35,19 @@ export default function DepositView() {
     finally { setBusy(false); }
   }
 
+  // Closed accounting period: no Edit / Void / Cancel (utils/periodLock.js; the server refuses them too).
+  const periodLocked = usePeriodLocked(d?.date_created, 'ar');
+
   if (loading || !d) return <LoadingSpinner />;
   const payments = d.payments || [];
   // Counter-sales orders swept into this deposit alongside customer payments.
   const salesOrders = d.sales_orders || [];
   const gl = d.gl || [];
+  const others = (d.lines || []).filter((l) => l.line_type === 'other');
+  const cashBacks = (d.lines || []).filter((l) => l.line_type === 'cashback');
+  const otherTotal = others.reduce((s, l) => s + num(l.amount), 0);
+  const cashBackTotal = cashBacks.reduce((s, l) => s + num(l.amount), 0);
+  const acctLabel = (l) => `${l.account_code} — ${l.account_name}`;
   const totalDebit = gl.reduce((s, l) => s + num(l.debit), 0);
   const totalCredit = gl.reduce((s, l) => s + num(l.credit), 0);
 
@@ -45,13 +56,20 @@ export default function DepositView() {
       <div className="page-header">
         <div />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate('/deposits')}>Back to Lists</button>
-          {can('/deposits', 'can_edit') && d.status !== 'void' && <button className="btn btn-sm" disabled title="Editing a posted Deposit isn't implemented in this build -- void and re-enter instead">Edit</button>}
-          {can('/deposits', 'can_edit') && d.status !== 'void' && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
+          <Link className="btn btn-sm" to={'/deposits'}>Back to Lists</Link>
+          {(can('/deposits', 'can_edit') && !periodLocked) && d.status !== 'void' && (d.reconciled
+            ? <button className="btn btn-sm" disabled title="Cleared in a Bank Reconciliation -- it can no longer be edited">Edit</button>
+            : <Link className="btn btn-sm" to={`/deposits/${d.id}/edit`}>Edit</Link>)}
+          {(can('/deposits', 'can_void') && !periodLocked) && d.status !== 'void' && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
         </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+      {periodLocked && (
+        <div className="warning-banner" style={{ marginBottom: 12 }}>
+          The accounting period for this transaction is closed ({periodLocked}), so it can no longer be edited, voided or cancelled.
+        </div>
+      )}
 
       <div className="estimate-banner">
         <div className="estimate-banner-title">
@@ -63,6 +81,7 @@ export default function DepositView() {
           <div>
             <div>Date : <span className="hi">{formatDate(d.date_created)}</span></div>
             <div>Account : <span className="hi">{d.account_name || ''}</span></div>
+            <div>Branch : <span className="hi">{d.location_name ? `${d.company_name ? `${d.company_name} — ` : ''}${d.location_name}` : ''}</span></div>
           </div>
           <div>
             <div>Memo : <span className="hi">{d.memo || ''}</span></div>
@@ -75,6 +94,8 @@ export default function DepositView() {
 
       <div className="status-tabs" style={{ marginTop: 20 }}>
         <button className={`status-tab ${tab === 'payments' ? 'active' : ''}`} onClick={() => setTab('payments')}>Payments</button>
+        <button className={`status-tab ${tab === 'other' ? 'active' : ''}`} onClick={() => setTab('other')}>Other Deposit {money(otherTotal)}</button>
+        <button className={`status-tab ${tab === 'cashback' ? 'active' : ''}`} onClick={() => setTab('cashback')}>Cash Back {money(cashBackTotal)}</button>
         <button className={`status-tab ${tab === 'gl' ? 'active' : ''}`} onClick={() => setTab('gl')}>GL Impact</button>
         <button className={`status-tab ${tab === 'system' ? 'active' : ''}`} onClick={() => setTab('system')}>System Info</button>
       </div>
@@ -88,8 +109,8 @@ export default function DepositView() {
                 {payments.length === 0 && salesOrders.length === 0 && <tr><td colSpan={4} className="muted" style={{ textAlign: 'center', padding: 20 }}>No payments.</td></tr>}
                 {payments.map((p) => (
                   <tr key={`cp-${p.id}`}>
-                    <td><button type="button" className="link-btn" onClick={() => navigate(`/customer-payments/${p.id}`)}>{p.customer_payment_no}</button></td>
-                    <td>{p.customer_name}</td>
+                    <td><Link className="link-btn" to={`/customer-payments/${p.id}`}>{p.customer_payment_no}</Link></td>
+                    <td><CustomerLink id={p.customer_id} name={p.customer_name} /></td>
                     <td>{formatDate(p.date_created)}</td>
                     <td style={{ textAlign: 'right' }}>{money(p.payment_amount)}</td>
                   </tr>
@@ -100,6 +121,44 @@ export default function DepositView() {
                     <td>{o.customer_name}</td>
                     <td>{formatDate(o.date_created)}</td>
                     <td style={{ textAlign: 'right' }}>{money(o.total_amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === 'other' && (
+        <div className="card">
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Name</th><th style={{ textAlign: 'right' }}>Amount</th><th>Account</th><th>Payment Method</th><th>Department</th><th>Location</th><th>Memo</th></tr></thead>
+              <tbody>
+                {others.length === 0 && <tr><td colSpan={7} className="muted" style={{ textAlign: 'center', padding: 20 }}>No other deposits.</td></tr>}
+                {others.map((l) => (
+                  <tr key={l.id}>
+                    <td>{l.party_name}</td><td style={{ textAlign: 'right' }}>{money(l.amount)}</td><td>{acctLabel(l)}</td>
+                    <td>{l.payment_method_name}</td><td>{l.department_name}</td><td>{l.location_name}</td><td>{l.memo}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === 'cashback' && (
+        <div className="card">
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th style={{ textAlign: 'right' }}>Amount</th><th>Account</th><th>Department</th><th>Location</th><th>Memo</th></tr></thead>
+              <tbody>
+                {cashBacks.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 20 }}>No cash back.</td></tr>}
+                {cashBacks.map((l) => (
+                  <tr key={l.id}>
+                    <td style={{ textAlign: 'right' }}>{money(l.amount)}</td><td>{acctLabel(l)}</td>
+                    <td>{l.department_name}</td><td>{l.location_name}</td><td>{l.memo}</td>
                   </tr>
                 ))}
               </tbody>
@@ -129,7 +188,7 @@ export default function DepositView() {
         <div className="card">
           <DataTable
             columns={[
-              { key: 'set_at', label: 'When', render: (r) => new Date(r.set_at).toLocaleString() },
+              { key: 'set_at', label: 'When', render: (r) => displayAuditTime(r.set_at) },
               { key: 'set_by_name', label: 'Set By' }, { key: 'event_type', label: 'Type' },
               { key: 'field_name', label: 'Field' }, { key: 'old_value', label: 'Old Value' }, { key: 'new_value', label: 'New Value' },
             ]}

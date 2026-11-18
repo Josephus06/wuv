@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate } from '../utils/dates';
+import useAutoSearch from '../utils/useAutoSearch';
+import SearchInput from '../components/SearchInput';
 
 const PAGE_SIZE = 10;
-function formatDate(v) { return v ? String(v).slice(0, 10) : ''; }
+function formatDate(v) { return v ? displayDate(String(v).slice(0, 10)) : ''; }
 
 // Mirrors the real Commission > Setups > Commission Table: a list of named rate schemes
 // (Sales Manager, Account Officer, ...). Each opens to its own bracket ladder.
@@ -31,6 +34,7 @@ export default function CommissionSchemes() {
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function runSearch() { setPage(1); load(search); }
+  useAutoSearch(search, runSearch);
 
   async function createScheme() {
     setError('');
@@ -85,7 +89,7 @@ export default function CommissionSchemes() {
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Scheme name..." />
+            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Scheme name..." />
           </div>
         </div>
         <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={runSearch}>Search</button>
@@ -109,7 +113,7 @@ export default function CommissionSchemes() {
                     <td data-label="Status">{row.is_active ? 'Active' : 'Inactive'}</td>
                     <td data-label="Created">{formatDate(row.created_at)}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      <button className="btn btn-sm btn-primary" style={{ marginRight: 4 }} onClick={() => navigate(`/commission-schemes/${row.id}`)}>View</button>
+                      <Link className="btn btn-sm btn-primary" style={{ marginRight: 4 }} to={`/commission-schemes/${row.id}`}>View</Link>
                       {can('/commission-schemes', 'can_delete') && <button className="btn btn-sm btn-warning" onClick={() => handleDelete(row)}>Delete</button>}
                     </td>
                   </tr>

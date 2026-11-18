@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
+import { usePeriodLocked } from '../utils/periodLock';
 import { useAuth } from '../context/useAuth';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate } from '../utils/dates';
 
 function money(v) { const n = Number(v); return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'; }
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : ''; }
+function formatDate(v) { return v ? displayDate(v) : ''; }
 
 // OSR Fulfillment (OSRF-####): the document created when an Office Supply Requisition is fulfilled.
 // It moved the stock and posts DR 30504 / CR 15400 for the value withdrawn.
@@ -20,24 +22,32 @@ export default function OsrFulfillmentView() {
 
   useEffect(() => { api.get(`/office-supply-requisitions/fulfillments/${id}`).then(({ data }) => { setF(data); setLoading(false); }); }, [id]);
 
+  // Closed accounting period: no Edit / Void / Cancel (utils/periodLock.js; the server refuses them too).
+  const periodLocked = usePeriodLocked(f?.date_created, 'non_gl');
+
   if (loading || !f) return <LoadingSpinner />;
   const lines = f.lines || [];
   const gl = f.gl || [];
   const totalDebit = gl.reduce((s, l) => s + num(l.debit), 0);
   const totalCredit = gl.reduce((s, l) => s + num(l.credit), 0);
   // No permission page of its own -- inherits the OSR's edit right.
-  const canEdit = can('/office-supply-requisitions', 'can_edit');
+  const canEdit = (can('/office-supply-requisitions', 'can_edit') && !periodLocked);
 
   return (
     <div>
       <div className="page-header">
         <div />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate(`/office-supply-requisitions/${f.osr_id}`)}>Back</button>
+          <Link className="btn btn-sm" to={`/office-supply-requisitions/${f.osr_id}`}>Back</Link>
           {canEdit && <button className="btn btn-sm" disabled title="Editing a saved OSR Fulfillment isn't implemented in this build">Edit</button>}
         </div>
       </div>
 
+      {periodLocked && (
+        <div className="warning-banner" style={{ marginBottom: 12 }}>
+          The accounting period for this transaction is closed ({periodLocked}), so it can no longer be edited, voided or cancelled.
+        </div>
+      )}
       <div className="estimate-banner">
         <div className="estimate-banner-title">
           <h1>OSR Fulfillment</h1>
@@ -47,7 +57,7 @@ export default function OsrFulfillmentView() {
           <div>
             <div>OSR Fulfillment # : <span className="hi">{f.osrf_no}</span></div>
             <div>Date : <span className="hi">{formatDate(f.date_created)}</span></div>
-            <div>Created From : <button type="button" className="estimate-so-link" onClick={() => navigate(`/office-supply-requisitions/${f.osr_id}`)}>{f.created_from_osr_no}</button></div>
+            <div>Created From : <Link className="estimate-so-link" to={`/office-supply-requisitions/${f.osr_id}`}>{f.created_from_osr_no}</Link></div>
           </div>
           <div>
             <div>Withdraw From : <span className="hi">{f.withdraw_from_name || ''}</span></div>

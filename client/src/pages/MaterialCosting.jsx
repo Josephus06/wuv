@@ -5,6 +5,8 @@ import { useAuth } from '../context/useAuth';
 import { computeMaterialCosting } from '../utils/costing';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
+import useAutoSearch from '../utils/useAutoSearch';
+import SearchInput from '../components/SearchInput';
 
 const PAGE_SIZE = 10;
 
@@ -38,9 +40,33 @@ function money(v) {
 // Average Cost are tracked in the item's stock/purchase unit, then shown a second time
 // normalized into the base unit by dividing out the conversion factor (e.g. a cost
 // tracked per ROLL, where 1 ROLL = 5 LMTR base units, shown per-LMTR here too).
+// Selling Price follows Total Price, rounded UP to the peso (42.44 -> 43), as on the Material Cost
+// screen -- so changing Material Cost, Wastage % or Mark-Up % moves it, and it is never typed.
+// toFixed first so float noise on a whole total (42.000000001) doesn't push it a peso up.
+function roundedSellingPrice(row) {
+  const { priceUnrounded } = computeMaterialCosting({ ...row, selling_price: null });
+  return Math.ceil(Number(priceUnrounded.toFixed(6)));
+}
 function baseCost(raw, conversionFactor) {
   const cf = num(conversionFactor) || 1;
   return num(raw) / cf;
+}
+// Price Indicator, as the source's Material Costs list shows it: Material Cost over Last Purchase
+// Price (Base Cost) -- 1.00 when the costing sits on the last purchase, 1.25 when it is 25% above,
+// 0.78 below. The stored price_indicator column is 0 throughout, so it is computed, not read.
+// Blank when there is no last purchase price to compare against.
+function priceIndicator(row) {
+  const lpp = baseCost(row.last_purchase_price, row.conversion_factor);
+  if (!(lpp > 0)) return '';
+  return `${(num(row.material_cost) / lpp).toFixed(2)}%`;
+}
+// MM/DD/YYYY, as the source lists it. mysql2 hands DATE columns over as a 'YYYY-MM-DD' string or
+// a Date depending on the connection's dateStrings; take the date part either way.
+function shortDate(v) {
+  if (!v) return '';
+  const s = v instanceof Date ? v.toISOString() : String(v);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[2]}/${m[3]}/${m[1]}` : s;
 }
 
 export default function MaterialCosting() {
@@ -71,6 +97,7 @@ export default function MaterialCosting() {
     setPage(1);
     load();
   }
+  useAutoSearch(search, runSearch);
 
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -85,6 +112,8 @@ export default function MaterialCosting() {
   async function commitField(row, field) {
     try {
       const payload = { ...row, [field]: row[field] === '' ? null : row[field] };
+      // An item with no Material Cost keeps whatever Selling Price it already had.
+      if (Number(payload.material_cost) > 0) payload.selling_price = roundedSellingPrice(payload);
       await api.put(`/inventory/${row.id}`, payload);
     } catch (err) {
       alert(err.response?.data?.error || 'Save failed');
@@ -115,7 +144,7 @@ export default function MaterialCosting() {
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Item code, name, description..." />
+            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Item code, name, description..." />
           </div>
         </div>
         <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={runSearch}>Search</button>
@@ -138,27 +167,38 @@ export default function MaterialCosting() {
           <div className="spreadsheet-wrap">
             <table className="spreadsheet-table">
               <thead>
+                {/* The source's own Material Costs header: Wastage Allowance and Mark-Up each span
+                    a Percent / Amount pair, everything else spans both header rows. */}
                 <tr>
-                  <th>Item Code</th>
-                  <th>Display Name</th>
-                  <th>Unit</th>
-                  <th>Last Purchase Price</th>
-                  <th>Last Purchase Price (Base Cost)</th>
-                  <th>Average Cost</th>
-                  <th>Average Cost (Base Cost)</th>
-                  <th>Material Cost (Base Cost)</th>
-                  <th>Wastage Allow. %</th>
-                  <th>Wastage Allow. Amt</th>
-                  <th>SubTotal</th>
-                  <th>Mark-Up %</th>
-                  <th>Mark-Up Amt</th>
-                  <th>Selling Price</th>
-                  <th></th>
+                  <th rowSpan={2}>Item Code</th>
+                  <th rowSpan={2}>Display Name</th>
+                  <th rowSpan={2}>Unit Title</th>
+                  <th rowSpan={2}>Base Unit</th>
+                  <th rowSpan={2}>Last Purchase Price</th>
+                  <th rowSpan={2}>Last Purchase Date</th>
+                  <th rowSpan={2}>Last Purchase Price (Base Cost)</th>
+                  <th rowSpan={2}>Average Cost</th>
+                  <th rowSpan={2}>Average Cost (Base Cost)</th>
+                  <th rowSpan={2}>Material Cost (Base Cost)</th>
+                  <th rowSpan={2}>Price Indicator</th>
+                  <th rowSpan={2}>Tolerance</th>
+                  <th colSpan={2} style={{ textAlign: 'center' }}>Wastage Allowance</th>
+                  <th rowSpan={2}>Subtotal</th>
+                  <th colSpan={2} style={{ textAlign: 'center' }}>Mark-Up</th>
+                  <th rowSpan={2}>Total Price</th>
+                  <th rowSpan={2}>Selling Price</th>
+                  <th rowSpan={2}></th>
+                </tr>
+                <tr>
+                  <th>Percent</th>
+                  <th>Amount</th>
+                  <th>Percent</th>
+                  <th>Amount</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 && (
-                  <tr><td colSpan={15} className="muted" style={{ textAlign: 'center', padding: 20 }}>No items found.</td></tr>
+                  <tr><td colSpan={21} className="muted" style={{ textAlign: 'center', padding: 20 }}>No items found.</td></tr>
                 )}
                 {pageRows.map((row) => {
                   const computed = computeMaterialCosting(row);
@@ -167,8 +207,10 @@ export default function MaterialCosting() {
                     <tr key={row.id}>
                       <td>{row.item_code}</td>
                       <td>{row.display_name}</td>
-                      <td>{row.base_unit_title}</td>
+                      <td>{row.unit_title || row.base_unit_code}</td>
+                      <td title={row.base_unit_title || undefined}>{row.base_unit_code}</td>
                       <td>{money(row.last_purchase_price)}</td>
+                      <td>{shortDate(row.last_purchase_date)}</td>
                       <td>{money(baseCost(row.last_purchase_price, row.conversion_factor))}</td>
                       <td>{money(row.average_cost)}</td>
                       <td>{money(baseCost(row.average_cost, row.conversion_factor))}</td>
@@ -180,6 +222,8 @@ export default function MaterialCosting() {
                           onBlur={() => commitField(row, 'material_cost')}
                         />
                       </td>
+                      <td>{priceIndicator(row)}</td>
+                      <td>{num(row.tolerance_pct).toFixed(2)}%</td>
                       <td>
                         <input
                           type="number" step="0.01" disabled={!canEdit}
@@ -199,18 +243,16 @@ export default function MaterialCosting() {
                         />
                       </td>
                       <td>{money(computed.priceUnrounded - computed.costPerUnit)}</td>
+                      <td>{money(computed.priceUnrounded)}</td>
                       <td>
                         <input
-                          type="number" step="0.0001" disabled={!canEdit}
-                          style={{ fontWeight: 600 }}
-                          value={row.selling_price ?? ''}
-                          placeholder={money(computed.pricePerUnit)}
-                          onChange={(e) => updateField(row.id, 'selling_price', e.target.value)}
-                          onBlur={() => commitField(row, 'selling_price')}
+                          readOnly disabled style={{ fontWeight: 600 }}
+                          title="Total Price rounded up to the whole peso"
+                          value={money(Number(row.material_cost) > 0 ? roundedSellingPrice(row) : row.selling_price)}
                         />
                       </td>
                       <td style={{ display: 'flex', gap: 6, flexDirection: 'column', alignItems: 'flex-start' }}>
-                        <Link className="btn btn-sm" to={`/inventory/${row.id}`}>View</Link>
+                        <Link className="btn btn-sm" to={`/material-costing/${row.id}`}>Update</Link>
                         {canApproveCosting && (
                           <button type="button" className="btn btn-sm btn-primary" disabled={approvingId === row.id} onClick={() => handleApproveCosting(row)}>
                             Approve Costing

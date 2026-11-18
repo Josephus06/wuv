@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import EntityPicker from '../components/EntityPicker';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -105,7 +105,7 @@ export default function PurchaseReturnEdit() {
       <div className="page-header">
         <h1>Vendor Return — {po.po_no}</h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn" onClick={() => navigate(`/purchase-orders/${id}`)}>Back to Lists</button>
+          <Link className="btn" to={`/purchase-orders/${id}`}>Back to Lists</Link>
           <button className="btn btn-primary" disabled={saving} onClick={handleSave}>{saving ? <LoadingSpinner inline size="sm" label="Saving..." /> : 'Save'}</button>
         </div>
       </div>
@@ -152,7 +152,7 @@ export default function PurchaseReturnEdit() {
                         value={l.qty_returned} onChange={(e) => updateLine(l.purchase_order_line_id, { qty_returned: e.target.value })}
                       />
                     </td>
-                    <td><input type="number" step="0.01" style={{ width: 90 }} value={l.rate} onChange={(e) => updateLine(l.purchase_order_line_id, { rate: e.target.value })} /></td>
+                    <td><input type="number" step="0.000001" style={{ width: 90 }} value={l.rate} onChange={(e) => updateLine(l.purchase_order_line_id, { rate: e.target.value })} /></td>
                     <td><input type="number" step="0.01" style={{ width: 70 }} value={l.disc_percent} onChange={(e) => updateLine(l.purchase_order_line_id, { disc_percent: e.target.value })} /></td>
                     <td>
                       <EntityPicker

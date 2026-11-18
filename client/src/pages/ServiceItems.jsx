@@ -4,6 +4,8 @@ import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
+import useAutoSearch from '../utils/useAutoSearch';
+import SearchInput from '../components/SearchInput';
 
 const PAGE_SIZE = 15;
 const YES_NO = (v) => (v ? 'YES' : 'NO');
@@ -36,6 +38,7 @@ export default function ServiceItems() {
     setPage(1);
     load();
   }
+  useAutoSearch(search, runSearch);
 
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -44,14 +47,14 @@ export default function ServiceItems() {
     <div>
       <div className="page-header">
         <h1>Service Items</h1>
-        {can('/service-items', 'can_add') && <button className="btn btn-primary" onClick={() => navigate('/inventory/new')}>Add New</button>}
+        {can('/service-items', 'can_add') && <Link className="btn btn-primary" to={'/service-items/new'}>Add New</Link>}
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Item code, name, description..." />
+            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Item code, name, description..." />
           </div>
         </div>
         <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={runSearch}>Search</button>
@@ -96,7 +99,7 @@ export default function ServiceItems() {
                     <td data-label="COGS">{row.cogs_account_name}</td>
                     <td style={{ display: 'flex', gap: 6 }}>
                       <Link className="btn btn-sm btn-primary" to={`/inventory/${row.id}`}>View</Link>
-                      {can('/service-items', 'can_edit') && <button className="btn btn-sm" onClick={() => navigate(`/inventory/${row.id}/edit`)}>Update</button>}
+                      {can('/service-items', 'can_edit') && <Link className="btn btn-sm" to={`/service-items/${row.id}/edit`}>Update</Link>}
                     </td>
                   </tr>
                 ))}

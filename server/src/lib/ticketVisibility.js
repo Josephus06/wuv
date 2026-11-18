@@ -1,4 +1,5 @@
 const pool = require('../db');
+const { getSbuScope } = require('./sbuGroups');
 
 // Resolves a user's ticket-ops role, mirroring designSupervisorVisibility.js's own
 // shape/discipline (checked fresh against the DB on every request, not trusted off the
@@ -47,7 +48,28 @@ async function ticketVisibilityClause(userId) {
     clauses.push(`t.department_id IN (${role.headOfDepartmentIds.map(() => '?').join(', ')})`);
     params.push(...role.headOfDepartmentIds);
   }
-  return { sql: `(${clauses.join(' OR ')})`, params, role };
+
+  // An SBU sees tickets raised from BOTH SBU groups, plus Marketing, matched on the
+  // raiser's department. Being tagged as approver already covers the group they approve,
+  // but after the cross-approval swap that is the OTHER group -- without this an SBU would
+  // lose sight of their own people's tickets entirely. Grouped by who raised it, not which
+  // department it was sent to: a Sales - 1 ticket is SBU 1's whether it goes to Accounting
+  // or Design.
+  //
+  // Marketing owns no SBU -- nobody holds it as a sales group -- so its tickets would
+  // otherwise be visible to no SBU at all. Both cover it jointly, the same arrangement
+  // non-standard job orders already use, which is why it is a third tab rather than being
+  // folded into one of theirs: either can act on it, and neither is made to own it.
+  const sbuScope = await getSbuScope(userId, { withMarketing: true });
+  if (sbuScope) {
+    clauses.push(
+      `EXISTS (SELECT 1 FROM users su JOIN employees se ON se.id = su.employee_id
+                WHERE su.id = t.created_by_user_id
+                  AND se.department_id IN (${sbuScope.departmentIds.map(() => '?').join(', ')}))`
+    );
+    params.push(...sbuScope.departmentIds);
+  }
+  return { sql: `(${clauses.join(' OR ')})`, params, role, sbuScope };
 }
 
 // Can this user assign/reassign this specific ticket? Either the System Admin

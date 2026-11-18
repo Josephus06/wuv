@@ -1,18 +1,22 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
+import { usePeriodLocked } from '../utils/periodLock';
 import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate, displayAuditTime } from '../utils/dates';
 
 function money(v) { const n = Number(v); return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'; }
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : ''; }
+function formatDate(v) { return v ? displayDate(v) : ''; }
 
 export default function FundTransferView() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
+  // The server lets a System Admin print without can_print, which /fund-transfers was never granted.
+  const canPrint = can('/fund-transfers', 'can_print') || user?.account_type === 'System Admin';
   const [ft, setFt] = useState(null);
   const [tab, setTab] = useState('gl');
   const [auditLogs, setAuditLogs] = useState([]);
@@ -32,6 +36,9 @@ export default function FundTransferView() {
     finally { setBusy(false); }
   }
 
+  // Closed accounting period: no Edit / Void / Cancel (utils/periodLock.js; the server refuses them too).
+  const periodLocked = usePeriodLocked(ft?.date_created, 'other_gl');
+
   if (loading || !ft) return <LoadingSpinner />;
   const gl = ft.gl || [];
   const totalDebit = gl.reduce((s, l) => s + num(l.debit), 0);
@@ -42,13 +49,19 @@ export default function FundTransferView() {
       <div className="page-header">
         <div />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate('/fund-transfers')}>Back to Lists</button>
-          {can('/fund-transfers', 'can_edit') && ft.status !== 'void' && <button className="btn btn-sm" disabled title="Editing a posted Fund Transfer isn't implemented in this build -- void and re-enter instead">Edit</button>}
-          {can('/fund-transfers', 'can_edit') && ft.status !== 'void' && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
+          <Link className="btn btn-sm" to={'/fund-transfers'}>Back to Lists</Link>
+          {canPrint && <button className="btn btn-sm" onClick={() => window.open(`/fund-transfers/${ft.id}/print`, '_blank')}>Print</button>}
+          {(can('/fund-transfers', 'can_edit') && !periodLocked) && ft.status !== 'void' && <Link className="btn btn-sm" to={`/fund-transfers/${ft.id}/edit`}>Edit</Link>}
+          {(can('/fund-transfers', 'can_void') && !periodLocked) && ft.status !== 'void' && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
         </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+      {periodLocked && (
+        <div className="warning-banner" style={{ marginBottom: 12 }}>
+          The accounting period for this transaction is closed ({periodLocked}), so it can no longer be edited, voided or cancelled.
+        </div>
+      )}
 
       <div className="estimate-banner">
         <div className="estimate-banner-title">
@@ -61,6 +74,7 @@ export default function FundTransferView() {
             <div>Date : <span className="hi">{formatDate(ft.date_created)}</span></div>
             <div>From Account : <span className="hi">{ft.from_account_name || ''}</span></div>
             <div>To Account : <span className="hi">{ft.to_account_name || ''}</span></div>
+            <div>Branch : <span className="hi">{ft.location_name ? `${ft.company_name ? `${ft.company_name} — ` : ''}${ft.location_name}` : ''}</span></div>
           </div>
           <div>
             <div>Memo : <span className="hi">{ft.memo || ''}</span></div>
@@ -94,7 +108,7 @@ export default function FundTransferView() {
         <div className="card">
           <DataTable
             columns={[
-              { key: 'set_at', label: 'When', render: (r) => new Date(r.set_at).toLocaleString() },
+              { key: 'set_at', label: 'When', render: (r) => displayAuditTime(r.set_at) },
               { key: 'set_by_name', label: 'Set By' }, { key: 'event_type', label: 'Type' },
               { key: 'field_name', label: 'Field' }, { key: 'old_value', label: 'Old Value' }, { key: 'new_value', label: 'New Value' },
             ]}

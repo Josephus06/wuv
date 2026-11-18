@@ -272,6 +272,18 @@ router.post('/import', requireAuth, requirePermission(ROUTE, 'can_add'), async (
     // department-scoped report with no way to place them after the fact.
     if (!departmentId) return res.status(400).json({ error: 'Select the department these sales belong to.' });
     if (!Array.isArray(shifts) || !shifts.length) return res.status(400).json({ error: 'Nothing to import.' });
+    // The branch is what puts these sales in a company's books (locations.company_id). Left blank,
+    // it is matched from the report's own branch code against the branches' Location Codes.
+    if (!officeLocationId) {
+      const codes = [...new Set(shifts.map((s) => s && s.branch_code).filter(Boolean))];
+      if (codes.length === 1) {
+        const [[loc]] = await conn.query('SELECT id FROM locations WHERE location_code = ? AND is_active = TRUE LIMIT 1', [codes[0]]);
+        if (loc) req.body.office_location_id = loc.id;
+      }
+      if (!req.body.office_location_id) {
+        return res.status(400).json({ error: `Select the branch these sales belong to${codes.length ? ` (no branch has the Location Code ${codes.join(', ')})` : ''}.` });
+      }
+    }
 
     const [[customer]] = await conn.query('SELECT id FROM customers WHERE id = ?', [customerId]);
     if (!customer) return res.status(400).json({ error: 'Customer not found.' });
@@ -416,7 +428,7 @@ router.post('/import', requireAuth, requirePermission(ROUTE, 'can_add'), async (
        VALUES ('', NULL, 'daily_collections', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'undeposited', ?, 0, ?, ?, ?, 0, 0)`,
       [
         branches || null, shifts.map((s) => s.source_file).filter(Boolean).join(', ').slice(0, 255) || null,
-        lastDate, customerId, officeLocationId || null, departmentId, resolvedSalesRepId, preparedById,
+        lastDate, customerId, req.body.office_location_id || officeLocationId || null, departmentId, resolvedSalesRepId, preparedById,
         headShift.cashier, headShift.closed_at, contractDescription,
         memo || null, netOfTax, netOfTax, taxTotal, totalAmount,
       ]

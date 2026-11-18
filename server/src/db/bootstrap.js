@@ -104,6 +104,11 @@ const STEPS = [
   ['add-shift-lunch.js', 'lunch stamps, late blocks and half-day lateness per shift'],
   ['add-undertime-blocks.js', 'undertime counted in blocks per shift'],
 
+  // GSUITE sync of the existing modules (2026-11-18): tables, columns, permission flags and pages
+  // the updated Accounting / Inventory / Purchasing / CRM / Costing code expects.
+  ['sync-gsuite-existing-modules.js', 'GSUITE sync: schema, permission flags and pages for the updated modules'],
+  ['add-company-branch-tagging.js', 'branch on Bank Deposits and Fund Transfers, for company reporting'],
+
   // Last: registers any page the migrations above did not, and gives the seeded admin an
   // account_type plus full access to everything.
   ['register-all-pages.js', 'register all pages and finish admin setup'],

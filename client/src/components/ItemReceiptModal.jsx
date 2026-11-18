@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import api from '../api/client';
 import LoadingSpinner from './LoadingSpinner';
+import { displayDate } from '../utils/dates';
 
 function qty(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : '';
 }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
 
 // Mirrors the real "Item Receipt" popup -- the other half of the two-step stock move
 // Item Fulfillment starts. Saving this is what actually lands stock at Transfer To.

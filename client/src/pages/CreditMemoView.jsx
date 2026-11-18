@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
+import { usePeriodLocked } from '../utils/periodLock';
 import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import LoadingSpinner from '../components/LoadingSpinner';
+
+import { displayDate, displayAuditTime } from '../utils/dates';
+import { CustomerLink } from '../components/PartyLink';
 
 function qty(v) {
   const n = Number(v);
@@ -13,7 +17,7 @@ function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
 
 const STATUS_LABELS = { open: 'OPEN', voided: 'VOID' };
 
@@ -57,9 +61,13 @@ export default function CreditMemoView() {
     }
   }
 
+  // Closed accounting period: no Edit / Void / Cancel (utils/periodLock.js; the server refuses them too).
+  const periodLocked = usePeriodLocked(cm?.date_created, 'ar');
+
   if (loading || !cm) return <LoadingSpinner />;
 
-  const canEdit = can('/credit-memos', 'can_edit');
+  const canEdit = (can('/credit-memos', 'can_edit') && !periodLocked);
+  const canVoid = (can('/credit-memos', 'can_void') && !periodLocked);
   const isOpen = cm.status === 'open';
 
   return (
@@ -67,14 +75,19 @@ export default function CreditMemoView() {
       <div className="page-header">
         <div />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate(`/sales-invoices/${cm.sales_invoice_id}`)}>Back</button>
-          {canEdit && isOpen && <button className="btn btn-sm" disabled title="Editing a posted Credit Memo isn't implemented in this build -- void and re-enter instead">Edit</button>}
+          <Link className="btn btn-sm" to={`/sales-invoices/${cm.sales_invoice_id}`}>Back</Link>
+          {canEdit && isOpen && <Link className="btn btn-sm" to={`/credit-memos/${cm.id}/edit`}>Edit</Link>}
           <button className="btn btn-sm" disabled title="Print formats aren't implemented in this build">Print</button>
-          {canEdit && isOpen && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
+          {canVoid && isOpen && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
         </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+      {periodLocked && (
+        <div className="warning-banner" style={{ marginBottom: 12 }}>
+          The accounting period for this transaction is closed ({periodLocked}), so it can no longer be edited, voided or cancelled.
+        </div>
+      )}
 
       <div className="estimate-banner">
         <div className="estimate-banner-title">
@@ -83,16 +96,21 @@ export default function CreditMemoView() {
         </div>
         <div className="estimate-status">
           {STATUS_LABELS[cm.status] || cm.status}
-          <button type="button" className="estimate-so-link" onClick={() => navigate(`/sales-invoices/${cm.sales_invoice_id}`)}>
+          <Link className="estimate-so-link" to={`/sales-invoices/${cm.sales_invoice_id}`}>
             {cm.invoice_no}
-          </button>
+          </Link>
         </div>
 
         <div className="estimate-detail-grid">
           <div>
-            <div>Customer : <span className="hi">{cm.customer_name}</span></div>
+            <div>Customer : <span className="hi"><CustomerLink id={cm.customer_id} name={cm.customer_name} /></span></div>
+            <div>Sales Rep : <span className="hi">{cm.sales_rep_name || '—'}</span></div>
             <div>Date : <span className="hi">{formatDate(cm.date_created)}</span></div>
-            <div>Created From : <button type="button" className="link-btn" onClick={() => navigate(`/sales-invoices/${cm.sales_invoice_id}`)}>{cm.invoice_no}</button></div>
+            {/* An imported memo can apply to several invoices at once, so there is no single
+                "created from" -- the Apply tab lists them all. */}
+            {cm.sales_invoice_id && (
+              <div>Created From : <Link className="link-btn" to={`/sales-invoices/${cm.sales_invoice_id}`}>{cm.invoice_no}</Link></div>
+            )}
           </div>
           <div>
             <div>Office Location : <span className="hi">{cm.office_location_name || '—'}</span></div>
@@ -139,7 +157,7 @@ export default function CreditMemoView() {
                   <tr key={l.id}>
                     <td>{l.line_no}</td>
                     <td>{l.job_order_id ? (
-                      <button type="button" className="link-btn" onClick={() => navigate(`/production/${l.job_order_id}`)}>{l.job_order_no}</button>
+                      <Link className="link-btn" to={`/production/${l.job_order_id}`}>{l.job_order_no}</Link>
                     ) : '—'}</td>
                     <td>{l.item_name || '—'}</td>
                     <td>{l.description}</td>
@@ -181,17 +199,35 @@ export default function CreditMemoView() {
         <div className="card">
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Invoice #</th><th>Date Created</th><th>Original Amount</th><th>Applied Amount</th></tr></thead>
+              {/* Mirrors live's Apply tab: what the invoice originally billed, what it still
+                  owed when this credit hit it, and what remains after. */}
+              <thead>
+                <tr>
+                  <th>Invoice #</th><th>Date Created</th>
+                  <th style={{ textAlign: 'right' }}>Original Amount</th>
+                  <th style={{ textAlign: 'right' }}>Original Amount Due</th>
+                  <th style={{ textAlign: 'right' }}>Amount Due</th>
+                  <th style={{ textAlign: 'right' }}>Applied Amount</th>
+                </tr>
+              </thead>
               <tbody>
                 {cm.applications.length === 0 && (
-                  <tr><td colSpan={4} className="muted" style={{ textAlign: 'center', padding: 20 }}>Not applied to any invoice yet.</td></tr>
+                  <tr><td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 20 }}>Not applied to any invoice yet.</td></tr>
                 )}
                 {cm.applications.map((a) => (
                   <tr key={a.id}>
-                    <td><button type="button" className="link-btn" onClick={() => navigate(`/sales-invoices/${a.sales_invoice_id}`)}>{a.invoice_no}</button></td>
+                    {/* Not every applied invoice exists in this database; show the number
+                        live recorded rather than a link that would 404. */}
+                    <td>
+                      {a.sales_invoice_id
+                        ? <Link className="link-btn" to={`/sales-invoices/${a.sales_invoice_id}`}>{a.invoice_no}</Link>
+                        : <span title="This invoice is not in this database">{a.invoice_no || '—'}</span>}
+                    </td>
                     <td>{formatDate(a.invoice_date)}</td>
-                    <td>{money(a.invoice_gross)}</td>
-                    <td>{money(a.applied_amount)}</td>
+                    <td style={{ textAlign: 'right' }}>{money(a.invoice_gross)}</td>
+                    <td style={{ textAlign: 'right' }}>{money(a.original_amount_due)}</td>
+                    <td style={{ textAlign: 'right' }}>{money(Number(a.original_amount_due || 0) - Number(a.applied_amount || 0))}</td>
+                    <td style={{ textAlign: 'right' }}>{money(a.applied_amount)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -234,7 +270,7 @@ export default function CreditMemoView() {
         <div className="card">
           <DataTable
             columns={[
-              { key: 'set_at', label: 'Date Time', render: (r) => new Date(r.set_at).toLocaleString() },
+              { key: 'set_at', label: 'Date Time', render: (r) => displayAuditTime(r.set_at) },
               { key: 'set_by_name', label: 'Set By' },
               { key: 'event_type', label: 'Type' },
               { key: 'field_name', label: 'Field' },

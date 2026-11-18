@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import DataTable from '../components/DataTable';
 import EntityPicker from '../components/EntityPicker';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayAuditTime } from '../utils/dates';
 
 // Mirrors the real system's "Add/Update Chart of Account" form. The real system's own
 // Chart of Account Type picker doubles as both the Type and Sub-Type selection (picking
@@ -83,7 +84,7 @@ export default function ChartOfAccountEdit() {
       <div className="page-header">
         <h1>{isNew ? 'Add Chart of Account' : `Chart of Account — ${form.account_code}`}</h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn" onClick={() => navigate(isNew ? '/chart-of-accounts' : `/chart-of-accounts/${id}`)}>Back</button>
+          <Link className="btn" to={isNew ? '/chart-of-accounts' : `/chart-of-accounts/${id}`}>Back</Link>
           <button className="btn btn-primary" disabled={saving} onClick={handleSave}>{saving ? <LoadingSpinner inline size="sm" label="Saving..." /> : 'Save'}</button>
         </div>
       </div>
@@ -135,7 +136,7 @@ export default function ChartOfAccountEdit() {
           <h3 className="subsection" style={{ marginTop: 0 }}>System Information</h3>
           <DataTable
             columns={[
-              { key: 'set_at', label: 'Date Time', render: (r) => new Date(r.set_at).toLocaleString() },
+              { key: 'set_at', label: 'Date Time', render: (r) => displayAuditTime(r.set_at) },
               { key: 'set_by_name', label: 'Set By' },
               { key: 'event_type', label: 'Type' },
               { key: 'field_name', label: 'Field' },

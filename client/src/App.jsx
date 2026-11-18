@@ -168,6 +168,24 @@ import WarrantyCertificateView from './pages/WarrantyCertificateView';
 import WarrantyCertificatePrint from './pages/WarrantyCertificatePrint';
 import NonStandardSalesOrderWizard from './pages/NonStandardSalesOrderWizard';
 import NonStandardSalesOrderView from './pages/NonStandardSalesOrderView';
+// Pages the GSUITE sync (2026-11-18) brought in because the existing modules link to them.
+import SalesInvoicePrint from './pages/SalesInvoicePrint';
+import DeliveryTicketPrint from './pages/DeliveryTicketPrint';
+import PurchaseOrderPrint from './pages/PurchaseOrderPrint';
+import FundTransferPrint from './pages/FundTransferPrint';
+import CommissionVoucherPrint from './pages/CommissionVoucherPrint';
+import TransferOrderPrint from './pages/TransferOrderPrint';
+import SupplierView from './pages/SupplierView';
+import CustomerForm from './pages/CustomerForm';
+import ServiceItemEdit from './pages/ServiceItemEdit';
+import NonInventories from './pages/NonInventories';
+import NonInventoryEdit from './pages/NonInventoryEdit';
+import CreditMemoForm from './pages/CreditMemoForm';
+import VendorBillEdit from './pages/VendorBillEdit';
+import ProcessCostingEdit from './pages/ProcessCostingEdit';
+import ProcessCostingView from './pages/ProcessCostingView';
+import MaterialCostEdit from './pages/MaterialCostEdit';
+import ReceivingReports from './pages/ReceivingReports';
 
 function App() {
   return (
@@ -183,6 +201,12 @@ function App() {
       <Route path="/payroll/:id/payslips/print" element={<ProtectedRoute><PayslipPrint /></ProtectedRoute>} />
       <Route path="/payroll/:id/print" element={<ProtectedRoute><PayrollRegisterPrint /></ProtectedRoute>} />
       <Route path="/kiosk-devices/badges/print" element={<ProtectedRoute><QrBadgesPrint /></ProtectedRoute>} />
+      <Route path="/sales-invoices/:id/print" element={<ProtectedRoute><SalesInvoicePrint /></ProtectedRoute>} />
+      <Route path="/delivery-tickets/:id/print" element={<ProtectedRoute><DeliveryTicketPrint /></ProtectedRoute>} />
+      <Route path="/purchase-orders/:id/print" element={<ProtectedRoute><PurchaseOrderPrint /></ProtectedRoute>} />
+      <Route path="/fund-transfers/:id/print" element={<ProtectedRoute><FundTransferPrint /></ProtectedRoute>} />
+      <Route path="/commission-vouchers/:id/print" element={<ProtectedRoute><CommissionVoucherPrint /></ProtectedRoute>} />
+      <Route path="/transfer-orders/:id/print" element={<ProtectedRoute><TransferOrderPrint /></ProtectedRoute>} />
       <Route
         element={
           <ProtectedRoute>
@@ -208,6 +232,29 @@ function App() {
         <Route path="/leads" element={<Leads />} />
         <Route path="/pipeline" element={<Pipeline />} />
         <Route path="/suppliers" element={<Suppliers />} />
+        <Route path="/suppliers/:id" element={<SupplierView />} />
+        <Route path="/customers/new" element={<CustomerForm />} />
+        <Route path="/customers/:id/edit" element={<CustomerForm />} />
+        <Route path="/service-items/new" element={<ServiceItemEdit />} />
+        <Route path="/service-items/:id/edit" element={<ServiceItemEdit />} />
+        <Route path="/non-inventories" element={<NonInventories />} />
+        <Route path="/non-inventories/new" element={<NonInventoryEdit />} />
+        <Route path="/non-inventories/:id/edit" element={<NonInventoryEdit />} />
+        <Route path="/receiving-reports" element={<ReceivingReports />} />
+        <Route path="/receiving-reports/:receiptId" element={<ReceivingReportView />} />
+        <Route path="/receiving-reports/:receiptId/edit" element={<ReceivingReportEdit />} />
+        <Route path="/credit-memos/new" element={<CreditMemoForm />} />
+        <Route path="/credit-memos/:id/edit" element={<CreditMemoForm />} />
+        <Route path="/vendor-bills/:id/edit" element={<VendorBillEdit />} />
+        <Route path="/journals/:id/edit" element={<JournalForm />} />
+        <Route path="/deposits/:id/edit" element={<DepositForm />} />
+        <Route path="/cheques/:id/edit" element={<ChequeForm />} />
+        <Route path="/fund-transfers/:id/edit" element={<FundTransferForm />} />
+        <Route path="/commission-payables/:id/edit" element={<CommissionPayableEdit />} />
+        <Route path="/process-costing/new" element={<ProcessCostingEdit />} />
+        <Route path="/process-costing/:id" element={<ProcessCostingView />} />
+        <Route path="/process-costing/:id/edit" element={<ProcessCostingEdit />} />
+        <Route path="/material-costing/:id" element={<MaterialCostEdit />} />
         <Route path="/inventory" element={<Inventory />} />
         <Route path="/inventory/new" element={<InventoryEdit />} />
         <Route path="/inventory/:id/edit" element={<InventoryEdit />} />

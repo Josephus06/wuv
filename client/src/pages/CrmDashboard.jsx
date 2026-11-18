@@ -1,20 +1,48 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api from '../api/client';
+import CrmCalendar from '../components/CrmCalendar';
+import CrmDrafts from '../components/CrmDrafts';
 import LoadingSpinner from '../components/LoadingSpinner';
+import NeedsAttention from '../components/NeedsAttention';
+import { displayDate } from '../utils/dates';
+
+const TABS = [['attention', 'Needs Attention'], ['drafts', 'Email Drafts'], ['calendar', 'Calendar'], ['overview', 'Overview']];
+
+// CRM home. Needs Attention (who to reach out to, and why) is the default tab; the pipeline
+// numbers that used to be the whole page are under Overview.
+export default function CrmDashboard() {
+  const [tab, setTab] = useState('attention');
+  return (
+    <div>
+      <div className="page-header">
+        <h1>CRM Dashboard</h1>
+      </div>
+      <div className="status-tabs" style={{ marginBottom: 16 }}>
+        {TABS.map(([k, label]) => (
+          <button key={k} type="button" className={`status-tab ${tab === k ? 'active' : ''}`} onClick={() => setTab(k)}>{label}</button>
+        ))}
+      </div>
+      {tab === 'attention' && <NeedsAttention />}
+      {tab === 'drafts' && <CrmDrafts />}
+      {tab === 'calendar' && <CrmCalendar />}
+      {tab === 'overview' && <CrmOverview />}
+    </div>
+  );
+}
 
 function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : ''; }
+function formatDate(v) { return v ? displayDate(v) : ''; }
 function isOverdue(v) { return v && new Date(v) < new Date(new Date().toDateString()); }
 
 // The "does this actually work as a CRM" payoff page -- aggregates the pipeline
 // (now derived from real estimates/sales_orders/job_orders, see
 // server/src/routes/crmPipeline.js, rather than a manually-tracked Opportunity stage)
 // and open follow-ups (crm_activities' My Tasks endpoint) into one view.
-export default function CrmDashboard() {
+function CrmOverview() {
   const navigate = useNavigate();
   const [pipeline, setPipeline] = useState([]);
   const [stages, setStages] = useState({ labels: {}, openStages: [] });
@@ -50,10 +78,6 @@ export default function CrmDashboard() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1>CRM Dashboard</h1>
-      </div>
-
       <div className="review-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
         <div className="card"><span className="muted">Open Pipeline Value</span><div className="hi-lg">{money(totalPipeline)}</div></div>
         <div className="card"><span className="muted">Open Deals</span><div className="hi-lg">{openDeals.length}</div></div>
@@ -82,7 +106,7 @@ export default function CrmDashboard() {
               </tbody>
             </table>
           </div>
-          <button type="button" className="btn" style={{ marginTop: 12 }} onClick={() => navigate('/pipeline')}>View Pipeline</button>
+          <Link className="btn" style={{ marginTop: 12 }} to={'/pipeline'}>View Pipeline</Link>
         </div>
 
         <div className="card">
@@ -100,7 +124,7 @@ export default function CrmDashboard() {
           ))}
           <h3 className="subsection">Leads</h3>
           <div>Open Leads: <strong>{openLeads}</strong></div>
-          <button type="button" className="btn" style={{ marginTop: 12 }} onClick={() => navigate('/leads')}>View Leads</button>
+          <Link className="btn" style={{ marginTop: 12 }} to={'/leads'}>View Leads</Link>
         </div>
       </div>
     </div>

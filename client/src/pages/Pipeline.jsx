@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { CustomerLink } from '../components/PartyLink';
 
 function money(v) {
   const n = Number(v);
@@ -75,7 +76,7 @@ export default function Pipeline() {
                   style={{ marginBottom: 8, padding: 10, cursor: 'pointer' }}
                   onClick={() => openDeal(r)}
                 >
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{r.customer_name || '—'}</div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{r.customer_name ? <CustomerLink id={r.customer_id} name={r.customer_name} /> : '—'}</div>
                   <div className="muted" style={{ fontSize: 12 }}>{r.current_doc_no}</div>
                   <div style={{ fontSize: 13, marginTop: 4 }}>{money(r.value)}</div>
                   {r.sales_rep_name && <div className="muted" style={{ fontSize: 11 }}>{r.sales_rep_name}</div>}

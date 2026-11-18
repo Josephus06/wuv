@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import api from '../api/client';
 import LoadingSpinner from './LoadingSpinner';
+import { displayDate } from '../utils/dates';
 
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
 
 // Mirrors the real "Item Fulfillments" popup reached from a Transfer Order's Receive
 // button -- lists every fulfillment batch raised against the TO so the user can pick

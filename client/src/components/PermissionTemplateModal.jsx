@@ -6,12 +6,19 @@ import LoadingSpinner from './LoadingSpinner';
 // Editor for the per-account-type default permission matrix that the Add/Update User wizard
 // offers as "Apply template". Editing a template only changes what future users start from --
 // it never touches the permissions of users who already exist.
+// The same columns, in the same order, as a user's Permissions tab (UserWizard), so a template can
+// grant everything a user can be granted. can_edit used to be labelled 'Can Update' here, and the
+// real can_update, can_view_all and can_print were missing -- the server saved them all along.
 const PERMISSION_ACTIONS = [
   { key: 'can_view', label: 'Can View' },
   { key: 'can_add', label: 'Can Add' },
-  { key: 'can_edit', label: 'Can Update' },
+  { key: 'can_edit', label: 'Can Edit' },
+  { key: 'can_update', label: 'Can Update' },
+  { key: 'can_view_all', label: 'Can View All' },
   { key: 'can_delete', label: 'Can Delete' },
   { key: 'can_approve', label: 'Can Approve' },
+  { key: 'can_print', label: 'Can Print' },
+  { key: 'can_void', label: 'Can Void' },
 ];
 
 export default function PermissionTemplateModal({ accountTypes, canEdit, onClose }) {

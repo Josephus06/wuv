@@ -176,6 +176,19 @@ Admin setup (${admins.length} account(s), ${allPages.length} pages):`);
       }
     }
     console.log(`  + ${u.username}: full access on ${granted} more page(s)`);
+
+    // The flags added by sync-gsuite-existing-modules.js (Update, View All, Print, Void) are part
+    // of "full access" too. Only the ones this database has.
+    const [extra] = await pool.query(
+      `SELECT COLUMN_NAME AS c FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'user_page_permissions'
+          AND COLUMN_NAME IN ('can_update', 'can_view_all', 'can_print', 'can_void')`
+    );
+    if (extra.length && !DRY_RUN) {
+      await pool.query(
+        `UPDATE user_page_permissions SET ${extra.map((r) => `${r.c} = TRUE`).join(', ')} WHERE user_id = ?`, [u.id]
+      );
+    }
   }
 
   await pool.end();

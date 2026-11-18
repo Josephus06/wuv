@@ -1,15 +1,19 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
 import Modal from '../components/Modal';
-import {
-  CANVAS_W, CANVAS_H, NODE_W, NODE_H, DIAMOND, NODES, EDGES, GUIDES, LEGEND,
-} from '../data/processFlow';
+import ManualStepImage from '../components/ManualStepImage';
+import api from '../api/client';
+import { NODE_W, NODE_H, DIAMOND } from '../data/processFlow';
+import { FLOWS, DEFAULT_FLOW } from '../data/flows';
 
-// Process Flow: the order-to-cash chart from the operations manual, drawn as clickable
-// nodes. Clicking any box opens the how-to for that step. The chart itself is pure
-// layout data (client/src/data/processFlow.js) -- nothing here talks to the API, so the
-// page works even for a user whose permissions hide most of the modules it describes.
+// The Manual: a workflow drawn as clickable nodes, where every box opens the how-to for that
+// step. Which workflow is chosen from the dropdown -- the order-to-cash chart, or Bank
+// Reconciliation.
+//
+// The charts are pure layout data (client/src/data/*.js) and this page knows only how to draw
+// "a flow", so a new manual is a new data file and nothing else. Nothing here talks to the API,
+// so the page works even for a user whose permissions hide most of the modules it describes.
 
 const STUB = 18;      // how far an edge leaves a node before it may turn
 const CORNER = 8;     // corner radius on the elbows
@@ -97,13 +101,30 @@ export default function ProcessFlow() {
   const [hoverId, setHoverId] = useState(null);
   const [zoom, setZoom] = useState(null); // null = fit to width
   const [fitScale, setFitScale] = useState(1);
+  const [flowKey, setFlowKey] = useState(DEFAULT_FLOW);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState('');
   const wrapRef = useRef(null);
+
+  // Step pictures (2026-10-14): which steps of this workflow have one, keyed node:step.
+  const [stepImages, setStepImages] = useState({});
+  useEffect(() => {
+    let alive = true;
+    api.get('/manual/images', { params: { flow: flowKey } })
+      .then(({ data }) => { if (alive) setStepImages(Object.fromEntries(data.map((r) => [`${r.node_id}:${r.step_index}`, r]))); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [flowKey]);
+  const canEditManual = can('/process-flow', 'can_edit');
+
+  const flow = FLOWS.find((f) => f.key === flowKey) || FLOWS[0];
+  const { CANVAS_W, CANVAS_H, NODES, EDGES, GUIDES, LEGEND } = flow.data;
 
   const boxes = useMemo(() => {
     const map = {};
     NODES.forEach((n) => { map[n.id] = nodeBox(n); });
     return map;
-  }, []);
+  }, [NODES]);
 
   const edges = useMemo(() => EDGES.map((e, i) => {
     const a = port(boxes[e.from], e.fromSide || 'bottom', e.fromOffset || 0);
@@ -113,7 +134,7 @@ export default function ProcessFlow() {
     // branch it labels rather than floating between two nodes.
     const anchor = pts[1] || pts[0];
     return { ...e, key: `${e.from}-${e.to}-${i}`, d: roundedPath(pts), labelX: anchor.x, labelY: anchor.y };
-  }), [boxes]);
+  }), [boxes, EDGES]);
 
   useLayoutEffect(() => {
     const el = wrapRef.current;
@@ -123,13 +144,62 @@ export default function ProcessFlow() {
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+    // Re-measured when the flow changes: the two charts are different widths, so a fit computed
+    // for one leaves the other cropped or adrift.
+  }, [CANVAS_W]);
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') setOpenId(null); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // The PDF is rendered server-side, from the layout THIS page just computed -- the elbow routing
+  // above is fiddly enough that a second implementation would drift from what is on screen, and the
+  // PDF is meant to be this chart. So the finished node boxes and edge paths go with the request.
+  async function downloadPdf() {
+    setPdfBusy(true);
+    setPdfError('');
+    try {
+      const res = await api.post('/manual/pdf', {
+        title: flow.title,
+        blurb: flow.blurb,
+        canvas: { w: CANVAS_W, h: CANVAS_H },
+        legend: LEGEND,
+        guides: GUIDES,
+        // Node order is reading order: the chart is laid out top to bottom, and the step-by-step
+        // follows the same sequence.
+        nodes: NODES.map((n) => {
+          const b = boxes[n.id];
+          return { id: n.id, label: n.label, kind: n.kind, x: b.x, y: b.y, w: b.w, h: b.h };
+        }),
+        edges: edges.map((e) => ({ d: e.d, label: e.label, tone: e.tone, labelX: e.labelX, labelY: e.labelY })),
+      }, { responseType: 'blob' });
+
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      const named = /filename="?([^";]+)"?/.exec(res.headers['content-disposition'] || '');
+      a.download = named ? named[1] : 'workflow-manual.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      // An error answering a blob request arrives AS a blob, so the usual err.response.data.error
+      // is a Blob and would render as "[object Blob]".
+      let message = 'Could not build the PDF.';
+      const body = err.response?.data;
+      if (body instanceof Blob) {
+        try { message = JSON.parse(await body.text()).error || message; } catch { /* not JSON */ }
+      } else if (body?.error) {
+        message = body.error;
+      }
+      setPdfError(message);
+    } finally {
+      setPdfBusy(false);
+    }
+  }
 
   const scale = zoom ?? fitScale;
   const guide = openId ? GUIDES[openId] : null;
@@ -140,19 +210,31 @@ export default function ProcessFlow() {
   return (
     <div>
       <div className="page-header">
-        <h1>Process Flow</h1>
+        <h1>{flow.title}</h1>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* Which manual. Switching resets the open guide and the zoom, because a step id and a
+              fit scale both belong to the chart they came from. */}
+          <select
+            value={flowKey}
+            aria-label="Workflow"
+            onChange={(e) => { setFlowKey(e.target.value); setOpenId(null); setZoom(null); }}
+            style={{ minWidth: 200 }}
+          >
+            {FLOWS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+          </select>
           <button className="btn btn-sm" onClick={() => setZoom((z) => Math.max(0.3, (z ?? fitScale) - 0.15))}>−</button>
           <button className="btn btn-sm" onClick={() => setZoom(null)}>Fit</button>
           <button className="btn btn-sm" onClick={() => setZoom((z) => Math.min(2, (z ?? fitScale) + 0.15))}>+</button>
+          <button className="btn btn-sm btn-primary" disabled={pdfBusy} onClick={downloadPdf}>
+            {pdfBusy ? 'Building…' : 'Download PDF'}
+          </button>
         </div>
       </div>
 
+      {pdfError && <div className="error-banner">{pdfError}</div>}
+
       <div className="card" style={{ marginBottom: 12 }}>
-        <p className="muted" style={{ fontSize: 13, margin: 0 }}>
-          The full order-to-cash process, start to finish. Click any box to open the step-by-step
-          guide for that stage — where it lives, who can do it, and what to click.
-        </p>
+        <p className="muted" style={{ fontSize: 13, margin: 0 }}>{flow.blurb}</p>
         <div className="pf-legend">
           {LEGEND.map((l) => (
             <span key={l.kind} className="pf-legend-item">
@@ -232,7 +314,18 @@ export default function ProcessFlow() {
 
             <h3>Steps</h3>
             <ol className="pf-steps">
-              {guide.steps.map((s, i) => <li key={i}>{s}</li>)}
+              {guide.steps.map((s, i) => (
+                <li key={i}>
+                  {s}
+                  <ManualStepImage flowKey={flowKey} nodeId={openId} stepIndex={i} image={stepImages[`${openId}:${i}`]}
+                    canEdit={canEditManual}
+                    onChanged={(row) => setStepImages((m) => {
+                      const next = { ...m };
+                      if (row) next[`${openId}:${i}`] = row; else delete next[`${openId}:${i}`];
+                      return next;
+                    })} />
+                </li>
+              ))}
             </ol>
 
             {guide.notes?.length > 0 && (
@@ -246,9 +339,9 @@ export default function ProcessFlow() {
 
             <div className="modal-actions">
               {guide.route && can(guide.route, 'can_view') && (
-                <button className="btn btn-primary" onClick={() => navigate(guide.route)}>
+                <Link className="btn btn-primary" to={guide.route}>
                   Go to {openNode.kind === 'decision' ? 'the screen' : NODES.find((n) => n.id === openId).label}
-                </button>
+                </Link>
               )}
               <button className="btn" onClick={() => setOpenId(null)}>Close</button>
             </div>

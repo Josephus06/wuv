@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import LoadingSpinner from '../components/LoadingSpinner';
+
+import { displayDate } from '../utils/dates';
 
 function qty(v) {
   const n = Number(v);
@@ -12,7 +14,7 @@ function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
 
 // Mirrors the real "Item Fulfillment" detail view -- reached from a Transfer Order's
 // Related Records tab. Total Amount and GL Impact are both derived on the fly
@@ -39,16 +41,14 @@ export default function ItemFulfillmentView() {
 
   if (loading || !data) return <LoadingSpinner />;
 
-  // Item Fulfillment has no permission page of its own -- it hangs off the Transfer
-  // Order, so it inherits the TO's edit right.
-  const canEdit = can('/transfer-orders', 'can_edit');
+  const canEdit = can('/item-fulfillments', 'can_edit');
 
   return (
     <div>
       <div className="page-header">
         <div />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate(`/transfer-orders/${data.transfer_order_id}`)}>Back</button>
+          <Link className="btn btn-sm" to={`/transfer-orders/${data.transfer_order_id}`}>Back</Link>
           {canEdit && <button className="btn btn-sm" disabled title="Editing a saved Item Fulfillment isn't implemented in this build">Edit</button>}
           <button className="btn btn-sm" disabled title="Print formats aren't implemented in this build">Print</button>
         </div>
@@ -65,7 +65,7 @@ export default function ItemFulfillmentView() {
           <div>
             <div>Item Fulfillment # : <span className="hi">{data.fulfillment_no}</span></div>
             <div>Date : <span className="hi">{formatDate(data.date_created)}</span></div>
-            <div>Created From : <button type="button" className="link-btn" onClick={() => navigate(`/transfer-orders/${data.transfer_order_id}`)}>{data.to_no}</button></div>
+            <div>Created From : <Link className="link-btn" to={`/transfer-orders/${data.transfer_order_id}`}>{data.to_no}</Link></div>
           </div>
           <div>
             <div>Withdraw From : <span className="hi">{data.withdraw_from_name}</span></div>
@@ -77,7 +77,7 @@ export default function ItemFulfillmentView() {
           </div>
         </div>
 
-        <div style={{ position: 'absolute', top: 24, right: 28, background: '#fff', borderRadius: 8, padding: '14px 20px', minWidth: 200 }}>
+        <div style={{ position: 'absolute', top: 24, right: 28, background: 'var(--surface-2)', borderRadius: 8, padding: '14px 20px', minWidth: 200 }}>
           <div className="muted" style={{ fontSize: 13 }}>Total Amount</div>
           <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--accent)' }}>{money(data.total_amount)}</div>
         </div>
@@ -95,21 +95,24 @@ export default function ItemFulfillmentView() {
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>Item</th><th>Fulfill</th><th>Received</th><th>Qty On Hand</th><th>UOM</th><th>Unit</th></tr>
+                {/* No UOM column. It showed transfer_order_lines.uom, which on job-order-driven
+                    lines is the unit the LENGTH and WIDTH were keyed in -- "MM" beside a quantity
+                    of 192 that is 192 square feet. Sitting next to the quantities it read as
+                    their unit, which it is not. Unit already carries the real one. */}
+                <tr><th>Item</th><th>Fulfill</th><th>Received</th><th>Qty On Hand</th><th>Unit</th></tr>
               </thead>
               <tbody>
                 {data.lines.map((l, idx) => (
                   <tr key={l.id}>
                     <td>
                       <span style={{ color: '#db2777', fontWeight: 600, marginRight: 8 }}>{idx + 1}</span>
-                      <button type="button" className="link-btn" onClick={() => navigate(`/inventory/${l.item_id}`)}>
+                      <Link className="link-btn" to={`/inventory/${l.item_id}`}>
                         {l.item_code} {l.item_name ? `— ${l.item_name}` : ''}
-                      </button>
+                      </Link>
                     </td>
                     <td>{qty(l.qty_fulfilled)}</td>
                     <td>{qty(l.received)}</td>
                     <td>{qty(l.qty_on_hand)}</td>
-                    <td>{l.uom}</td>
                     <td>{l.unit}</td>
                   </tr>
                 ))}
@@ -163,7 +166,7 @@ export default function ItemFulfillmentView() {
                 {receipts.map((r) => (
                   <tr key={r.id}>
                     <td>Item Receipt</td>
-                    <td><button type="button" className="link-btn" onClick={() => navigate(`/transfer-orders/item-receipts/${r.id}`)}>{r.receipt_no}</button></td>
+                    <td><Link className="link-btn" to={`/transfer-orders/item-receipts/${r.id}`}>{r.receipt_no}</Link></td>
                     <td>{formatDate(r.date_created)}</td>
                   </tr>
                 ))}

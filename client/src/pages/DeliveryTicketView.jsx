@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
+import { usePeriodLocked } from '../utils/periodLock';
 import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import SalesInvoiceModal from '../components/SalesInvoiceModal';
+import DeliveryTicketModal from '../components/DeliveryTicketModal';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate, displayAuditTime } from '../utils/dates';
+import { CustomerLink } from '../components/PartyLink';
 
 function qty(v) {
   const n = Number(v);
@@ -14,7 +18,7 @@ function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
 
 const STATUS_LABELS = { open: 'OPEN', converted: 'CONVERTED', void: 'VOID' };
 
@@ -26,15 +30,17 @@ const STATUS_LABELS = { open: 'OPEN', converted: 'CONVERTED', void: 'VOID' };
 export default function DeliveryTicketView() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const [dt, setDt] = useState(null);
   const [tab, setTab] = useState('items');
   const [auditLogs, setAuditLogs] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [showBillMenu, setShowBillMenu] = useState(false);
-  const [showSIModal, setShowSIModal] = useState(false);
+  // 'SI' or 'DR' while the Create form is open -- a ticket converts to either.
+  const [billType, setBillType] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState('');
 
   function load() {
@@ -70,9 +76,17 @@ export default function DeliveryTicketView() {
     }
   }
 
+  // Closed accounting period: no Edit / Void / Cancel (utils/periodLock.js; the server refuses them too).
+  const periodLocked = usePeriodLocked(dt?.date_created, 'ar');
+
   if (loading || !dt) return <LoadingSpinner />;
 
-  const canEdit = can('/delivery-tickets', 'can_edit');
+  const canEdit = (can('/delivery-tickets', 'can_edit') && !periodLocked);
+  const canVoid = (can('/delivery-tickets', 'can_void') && !periodLocked);
+  // Billing the ticket raises a Sales Invoice, so it answers to the invoice page's permission,
+  // not this one -- same rule as the Sales Order's Bill menu, Head Office on can_edit and the
+  // branches on can_view. Gated on both because converting the ticket needs this page too.
+  const canBillSI = can('/sales-invoices', user?.is_head_office === false ? 'can_view' : 'can_edit');
   const isOpen = dt.status === 'open';
 
   return (
@@ -80,27 +94,46 @@ export default function DeliveryTicketView() {
       <div className="page-header">
         <div />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate(`/sales-orders/${dt.sales_order_id}`)}>Back</button>
-          {canEdit && <button className="btn btn-sm" disabled title="Editing a saved Delivery Ticket isn't implemented in this build">Edit</button>}
-          <button className="btn btn-sm" disabled title="Print formats aren't implemented in this build">Print</button>
+          <Link className="btn btn-sm" to={`/sales-orders/${dt.sales_order_id}`}>Back</Link>
+          {/* Edit sits here, next to Back. Only an open ticket can be edited -- a converted one has
+              become its invoice, a void one is final -- so those show it greyed with the reason. */}
+          {canEdit && isOpen && <button className="btn btn-sm" onClick={() => setEditing(true)}>Edit</button>}
+          {canEdit && !isOpen && (
+            <button className="btn btn-sm" disabled
+              title={dt.status === 'converted' ? 'This ticket has been converted to an invoice and can no longer be edited.' : 'This ticket is void and cannot be edited.'}>
+              Edit
+            </button>
+          )}
+          <button className="btn btn-sm" onClick={() => window.open(`/delivery-tickets/${id}/print`, '_blank')}>Print</button>
           <button className="btn btn-sm" disabled title="Credit Memos aren't implemented in this build">Credit Memo</button>
           {/* Bill on a Delivery Ticket raises the official Sales Invoice from it and
               converts the ticket -- so it's offered only while the ticket is still open. */}
-          {canEdit && isOpen && (
+          {/* Not held back by a closed period (asked 2026-10-12): converting writes nothing dated in the
+              ticket's month -- it raises a Sales Invoice / DR dated today, and the server checks THAT
+              date's period (salesInvoices.js). Edit and Void, which change the ticket itself, stay locked. */}
+          {can('/delivery-tickets', 'can_edit') && canBillSI && isOpen && (
             <div style={{ position: 'relative' }}>
               <button className="btn btn-sm btn-primary" onClick={() => setShowBillMenu((s) => !s)}>Bill ▾</button>
               {showBillMenu && (
                 <div className="card" style={{ position: 'absolute', right: 0, top: '110%', zIndex: 20, padding: 6, minWidth: 80 }}>
-                  <button type="button" className="btn btn-sm" style={{ width: '100%' }} onClick={() => { setShowBillMenu(false); setShowSIModal(true); }}>SI</button>
+                  {['SI', 'DR'].map((t) => (
+                    <button key={t} type="button" className="btn btn-sm" style={{ width: '100%', marginBottom: 4 }} onClick={() => { setShowBillMenu(false); setBillType(t); }}>{t}</button>
+                  ))}
                 </div>
               )}
             </div>
           )}
-          {canEdit && isOpen && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
+          {canVoid && isOpen && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleVoid}>Void</button>}
         </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+      {periodLocked && (
+        <div className="warning-banner" style={{ marginBottom: 12 }}>
+          The accounting period for this transaction is closed ({periodLocked}), so it can no longer be edited or voided.
+          It can still be billed: the Sales Invoice or DR raised from it is dated today.
+        </div>
+      )}
 
       <div className="estimate-banner">
         <div className="estimate-banner-title">
@@ -109,15 +142,15 @@ export default function DeliveryTicketView() {
         </div>
         <div className="estimate-status">
           {STATUS_LABELS[dt.status] || dt.status}
-          <button type="button" className="estimate-so-link" onClick={() => navigate(`/sales-orders/${dt.sales_order_id}`)}>
+          <Link className="estimate-so-link" to={`/sales-orders/${dt.sales_order_id}`}>
             {dt.sales_order_no}
-          </button>
+          </Link>
         </div>
 
         <div className="estimate-detail-grid">
           <div>
             <h4>Customer</h4>
-            <div><span className="hi">{dt.customer_name}</span></div>
+            <div><span className="hi"><CustomerLink id={dt.customer_id} name={dt.customer_name} /></span></div>
             <div>TIN : <span className="hi">{dt.customer_tin || '—'}</span></div>
             <div>Contact Person : <span className="hi">{dt.contact_name || '—'}</span></div>
             <div>Contact Email : <span className="hi">{dt.contact_email || '—'}</span></div>
@@ -126,7 +159,7 @@ export default function DeliveryTicketView() {
           </div>
           <div>
             <div>Date : <span className="hi">{formatDate(dt.date_created)}</span></div>
-            <div>Created From : <button type="button" className="link-btn" onClick={() => navigate(`/sales-orders/${dt.sales_order_id}`)}>{dt.sales_order_no}</button></div>
+            <div>Created From : <Link className="link-btn" to={`/sales-orders/${dt.sales_order_id}`}>{dt.sales_order_no}</Link></div>
             <div>Memo : <span className="hi">{dt.memo || ''}</span></div>
             <div>Sales Rep : <span className="hi">{dt.sales_rep_name || '—'}</span></div>
             <div>Office Location : <span className="hi">{dt.office_location_name || '—'}</span></div>
@@ -173,7 +206,7 @@ export default function DeliveryTicketView() {
                   <tr key={l.id}>
                     <td>{l.line_no}</td>
                     <td>{l.job_order_id ? (
-                      <button type="button" className="link-btn" onClick={() => navigate(`/production/${l.job_order_id}`)}>{l.job_order_no}</button>
+                      <Link className="link-btn" to={`/production/${l.job_order_id}`}>{l.job_order_no}</Link>
                     ) : '—'}</td>
                     <td>{l.item_name}</td>
                     <td>{l.description}</td>
@@ -252,14 +285,21 @@ export default function DeliveryTicketView() {
               <tbody>
                 <tr>
                   <td>Sales Order</td>
-                  <td><button type="button" className="link-btn" onClick={() => navigate(`/sales-orders/${dt.sales_order_id}`)}>{dt.sales_order_no}</button></td>
+                  <td><Link className="link-btn" to={`/sales-orders/${dt.sales_order_id}`}>{dt.sales_order_no}</Link></td>
                   <td>—</td>
                 </tr>
                 {invoices.map((si) => (
                   <tr key={si.id}>
                     <td>Sales Invoice</td>
-                    <td><button type="button" className="link-btn" onClick={() => navigate(`/sales-invoices/${si.id}`)}>{si.invoice_no}</button></td>
+                    <td><Link className="link-btn" to={`/sales-invoices/${si.id}`}>{si.invoice_no}</Link></td>
                     <td>{formatDate(si.date_created)}</td>
+                  </tr>
+                ))}
+                {(dt.reversal_journals || []).map((j) => (
+                  <tr key={`j${j.id}`}>
+                    <td>Reversal Journal</td>
+                    <td><Link className="link-btn" to={`/journals/${j.id}`}>{j.journal_no}</Link></td>
+                    <td>{formatDate(j.date_created)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -272,7 +312,7 @@ export default function DeliveryTicketView() {
         <div className="card">
           <DataTable
             columns={[
-              { key: 'set_at', label: 'Date Time', render: (r) => new Date(r.set_at).toLocaleString() },
+              { key: 'set_at', label: 'Date Time', render: (r) => displayAuditTime(r.set_at) },
               { key: 'set_by_name', label: 'Set By' },
               { key: 'event_type', label: 'Type' },
               { key: 'field_name', label: 'Field' },
@@ -285,11 +325,22 @@ export default function DeliveryTicketView() {
         </div>
       )}
 
-      {showSIModal && (
+      {/* Edit: the create form, pre-filled from this ticket (only while it is open). */}
+      {editing && (
+        <DeliveryTicketModal
+          salesOrderId={dt.sales_order_id}
+          ticket={dt}
+          onClose={() => setEditing(false)}
+          onSaved={async () => { setEditing(false); await load(); }}
+        />
+      )}
+
+      {billType && (
         <SalesInvoiceModal
           deliveryTicketId={Number(id)}
-          onClose={() => setShowSIModal(false)}
-          onSaved={async (si) => { setShowSIModal(false); await load(); navigate(`/sales-invoices/${si.id}`); }}
+          invoiceType={billType}
+          onClose={() => setBillType(null)}
+          onSaved={async (si) => { setBillType(null); await load(); navigate(`/sales-invoices/${si.id}`); }}
         />
       )}
     </div>

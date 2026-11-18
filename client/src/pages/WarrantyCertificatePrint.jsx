@@ -4,7 +4,7 @@ import api from '../api/client';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { COMPANY } from '../config/company';
 
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : ''; }
+function formatDate(v) { return v ? displayDate(v) : ''; }
 
 const COVERAGE_TERMS = [
   ['Structural', 'Poles, Foundation and Frames'],
@@ -32,8 +32,13 @@ export default function WarrantyCertificatePrint() {
 
   if (!wc) return <LoadingSpinner />;
   const lines = wc.lines || [];
-  const groups = lines.reduce((acc, l) => { const k = l.coverage || '—'; (acc[k] = acc[k] || []).push(l); return acc; }, {});
-  const validities = [...new Set(lines.map((l) => l.coverage).filter(Boolean))];
+  const groups = lines.reduce((acc, l) => {
+    // A line may carry several coverages ("Structural, Electrical"); it is listed under each.
+    const keys = String(l.coverage || '').split(',').map((x) => x.trim()).filter(Boolean);
+    for (const k of keys.length ? keys : ['—']) (acc[k] = acc[k] || []).push(l);
+    return acc;
+  }, {});
+  const validities = Object.keys(groups).filter((k) => k !== '—');
 
   return (
     <div className="wc-print">
@@ -41,7 +46,9 @@ export default function WarrantyCertificatePrint() {
         .wc-print { max-width: 820px; margin: 0 auto; padding: 32px; color: #1f2937; font-size: 13px; line-height: 1.55; }
         .wc-print h2 { color: #4338ca; margin: 0 0 4px; }
         .wc-brand { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; margin-bottom: 18px; }
-        .wc-brand .co { font-weight: 800; font-size: 22px; color: #ea580c; }
+        /* Replaces the typed GRAPHICSTAR wordmark. "IMAGING CORP." came off the address line
+           with it -- the artwork carries the name, and printing it twice read as a mistake. */
+        .wc-logo { width: 48mm; height: auto; display: block; margin-bottom: 4px; }
         .wc-title { background: linear-gradient(90deg,#4338ca,#a5b4fc); color: #fff; padding: 10px 16px; border-radius: 4px; font-size: 20px; font-weight: 700; }
         .wc-print h3 { margin: 20px 0 6px; color: #111827; }
         .wc-print .band { background: #eef2f7; font-weight: 700; padding: 6px 10px; margin-top: 14px; }

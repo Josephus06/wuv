@@ -1,9 +1,11 @@
 const express = require('express');
 const pool = require('../db');
-const { requireAuth, requirePermission } = require('../middleware/auth');
+const { assignDocNo } = require('../lib/docNumber');
+const { requireAuth, requirePermission, isSystemAdmin, userCan } = require('../middleware/auth');
 const { assertPeriodOpen } = require('../lib/accountingPeriod');
 const { computeCommissionVoucherGl } = require('../lib/glImpact');
 const { buildCommissionReport } = require('../lib/commissionReport');
+const { payableStatus, liveExpectedByPayable } = require('../lib/commissionPayableStatus');
 
 const router = express.Router();
 // Commission Voucher (COMVCH-####): the release/payment side of Commission Payable. Pays (full or
@@ -14,12 +16,66 @@ const router = express.Router();
 const ROUTE = '/commission-vouchers';
 const round2 = (n) => Number((Number(n) || 0).toFixed(2));
 
+// An expense on Commission Payable may be pointed at one of the employee's own monthly
+// payables, which makes it a PAYBACK: it reduces that month's Released Commission and settles
+// an overpayment, instead of joining the refund pool (see lib/commissionRelease.js).
+//
+// Enforced here rather than trusted from the client, because a target on the wrong account
+// would silently change a month's released figure with nothing on screen explaining it, and a
+// target on another employee's payable would move somebody else's commission.
+const COMMISSION_PAYABLE_CODE = '24200';
+
+async function validateExpenseTargets(preparedExpenses, employeeId) {
+  const targeted = preparedExpenses.filter((e) => e.applies_to_payable_id);
+  if (!targeted.length) return null;
+
+  const accountIds = [...new Set(targeted.map((e) => e.account_id))];
+  const [accounts] = await pool.query('SELECT id, account_code FROM chart_of_accounts WHERE id IN (?)', [accountIds]);
+  const codeById = new Map(accounts.map((a) => [String(a.id), a.account_code]));
+  if (targeted.some((e) => codeById.get(String(e.account_id)) !== COMMISSION_PAYABLE_CODE)) {
+    return `Only an expense on ${COMMISSION_PAYABLE_CODE} Commission Payable can be applied to a month.`;
+  }
+
+  // Rejected before the query, not after: mysql2 renders a NaN parameter as the bare token
+  // NaN, so a non-numeric value arrives at the database as an identifier and comes back as
+  // "Unknown column 'NaN' in 'where clause'" -- an error that says nothing about the month
+  // that was actually selected.
+  const payableIds = [...new Set(targeted.map((e) => Number(e.applies_to_payable_id)))];
+  if (payableIds.some((id) => !Number.isFinite(id) || id <= 0)) {
+    return 'A selected month is not valid. Re-pick it and save again.';
+  }
+
+  const [payables] = await pool.query(
+    'SELECT id FROM commission_payables WHERE id IN (?) AND employee_id = ?', [payableIds, employeeId],
+  );
+  if (payables.length !== payableIds.length) {
+    return 'A selected month does not belong to this employee.';
+  }
+  return null;
+}
+
 async function logAudit(conn, { cvId, userId, eventType, fieldName = null, oldValue = null, newValue = null }) {
   await conn.query(
     `INSERT INTO audit_logs (auditable_type, auditable_id, event_type, field_name, old_value, new_value, set_by_user_id)
      VALUES ('CommissionVoucher', ?, ?, ?, ?, ?, ?)`,
     [cvId, eventType, fieldName, oldValue === null ? null : String(oldValue), newValue === null ? null : String(newValue), userId]
   );
+}
+
+// A release above its commission's commissionable (asked 2026-10-26): no longer refused outright --
+// T1S's figure can trail the source's (a cancelled job order taken out, a corrected line) and the
+// voucher is released all the same. The first save is answered with what is over and by how much
+// (over_release: the page asks to confirm); saved again with allow_over_release, it goes through and
+// each over-release is written to the voucher's audit trail.
+function overReleaseError(overs, body) {
+  if (!overs.length || body?.allow_over_release) return null;
+  const list = overs.map((o) => `${o.cp.commission_payable_no}: ${o.released.toFixed(2)} released, ${Number(o.ceiling).toFixed(2)} commissionable (over by ${round2(o.released - o.ceiling).toFixed(2)})`);
+  return { error: `Released more than the commissionable -- ${list.join('; ')}.`, over_release: overs.map((o) => ({ commission_payable_no: o.cp.commission_payable_no, released: o.released, commissionable: o.ceiling })) };
+}
+async function logOverReleases(conn, cvId, userId, overs) {
+  for (const o of overs) {
+    await logAudit(conn, { cvId, userId, eventType: 'Updated', fieldName: `Released over commissionable (${o.cp.commission_payable_no})`, oldValue: Number(o.ceiling).toFixed(2), newValue: o.released.toFixed(2) });
+  }
 }
 
 // The "commissionable" a voucher may release against is the UNPAID commission from the Commission
@@ -42,13 +98,10 @@ async function unpaidByPayable(employeeId, payables) {
   return out;
 }
 
-// Recompute a payable's status from its paid-vs-commissionable position.
-function payableStatus(commissionable, paid) {
-  const c = round2(commissionable); const p = round2(paid);
-  if (p <= 0) return 'unpaid';
-  if (p + 0.005 >= c) return 'paid';
-  return 'partial';
-}
+// A payable's status is recomputed from how much has been released against it: PAID means the
+// month's whole Expected Commission has gone out. "Expected" is the report's LIVE figure, not the
+// one stored on the payable when it was raised -- see lib/commissionPayableStatus.js. Computed
+// before each transaction opens (it runs the Commission report) and passed in as liveExpected.
 
 // Employees who still have a releasable (unpaid/partial) commission payable.
 router.get('/employees', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
@@ -100,6 +153,9 @@ router.get('/for-employee/:employeeId', requireAuth, requirePermission(ROUTE, 'c
       date_created: p.date_created,
       period_from: p.period_from,
       commissionable_amount: round2((unpaidMap.get(p.commission_payable_id) ?? 0) + (ownReleased.get(Number(p.commission_payable_id)) || 0)),
+      // What this voucher already released on it: kept even when the month's commission has since
+      // dropped below it (PUT /:id allows keeping or lowering it, not raising it).
+      already_released: ownReleased.get(Number(p.commission_payable_id)) || 0,
     }));
     // Only postable (non-summary) accounts belong in the pickers -- the x00 header accounts
     // (11000 Cash in Bank, 11100 BPI, ...) are parent groupings, not real bank/expense accounts.
@@ -133,36 +189,82 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
   } catch (err) { next(err); }
 });
 
+// One voucher with its commissions, expenses and (posted) GL impact: the detail view and the print.
+async function loadVoucher(id) {
+  const [[cv]] = await pool.query(
+    `SELECT cv.*, CONCAT(e.first_name, ' ', e.last_name) AS employee_name, pm.name AS payment_method_name,
+            coa.account_code AS cash_account_code, coa.account_name AS cash_account_name, u.display_name AS created_by_name,
+            u.signature_data AS prepared_signature
+     FROM commission_vouchers cv
+     LEFT JOIN employees e ON e.id = cv.employee_id
+     LEFT JOIN payment_methods pm ON pm.id = cv.payment_method_id
+     LEFT JOIN chart_of_accounts coa ON coa.id = cv.cash_bank_account_id
+     LEFT JOIN users u ON u.id = cv.created_by_user_id
+     WHERE cv.id = ?`,
+    [id]
+  );
+  if (!cv) return null;
+
+  const [lines] = await pool.query(
+    `SELECT cvl.*, cp.commission_payable_no, cp.date_created AS payable_date, cp.period_from
+     FROM commission_voucher_lines cvl
+     LEFT JOIN commission_payables cp ON cp.id = cvl.commission_payable_id
+     WHERE cvl.commission_voucher_id = ? ORDER BY cp.period_from`,
+    [id]
+  );
+  const [expenses] = await pool.query(
+    `SELECT cve.*, coa.account_code, coa.account_name
+     FROM commission_voucher_expenses cve LEFT JOIN chart_of_accounts coa ON coa.id = cve.account_id
+     WHERE cve.commission_voucher_id = ?`,
+    [id]
+  );
+  // The month a payback is pointed at, resolved separately rather than joined above so this
+  // page still loads on a database where the migration has not been run yet -- `cve.*` simply
+  // returns no such column there, and this block is skipped.
+  const targetIds = [...new Set(expenses.map((e) => e.applies_to_payable_id).filter(Boolean))];
+  if (targetIds.length) {
+    const [periods] = await pool.query(
+      'SELECT id, period_from FROM commission_payables WHERE id IN (?)', [targetIds],
+    );
+    const periodById = new Map(periods.map((p) => [String(p.id), p.period_from]));
+    for (const e of expenses) {
+      e.applies_to_period_from = e.applies_to_payable_id ? periodById.get(String(e.applies_to_payable_id)) || null : null;
+    }
+  }
+  const glImpact = await computeCommissionVoucherGl(cv, lines, expenses);
+  return { ...cv, lines, expenses, gl_impact: glImpact };
+}
+
 router.get('/:id', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, res, next) => {
   try {
-    const [[cv]] = await pool.query(
-      `SELECT cv.*, CONCAT(e.first_name, ' ', e.last_name) AS employee_name, pm.name AS payment_method_name,
-              coa.account_code AS cash_account_code, coa.account_name AS cash_account_name, u.display_name AS created_by_name
-       FROM commission_vouchers cv
-       LEFT JOIN employees e ON e.id = cv.employee_id
-       LEFT JOIN payment_methods pm ON pm.id = cv.payment_method_id
-       LEFT JOIN chart_of_accounts coa ON coa.id = cv.cash_bank_account_id
-       LEFT JOIN users u ON u.id = cv.created_by_user_id
-       WHERE cv.id = ?`,
-      [req.params.id]
-    );
+    const cv = await loadVoucher(req.params.id);
     if (!cv) return res.status(404).json({ error: 'Not found' });
+    // The preparer's signature image is for the print only.
+    const { prepared_signature: _sig, ...rest } = cv;
+    res.json(rest);
+  } catch (err) { next(err); }
+});
 
-    const [lines] = await pool.query(
-      `SELECT cvl.*, cp.commission_payable_no, cp.date_created AS payable_date, cp.period_from
-       FROM commission_voucher_lines cvl
-       LEFT JOIN commission_payables cp ON cp.id = cvl.commission_payable_id
-       WHERE cvl.commission_voucher_id = ? ORDER BY cp.period_from`,
-      [req.params.id]
-    );
-    const [expenses] = await pool.query(
-      `SELECT cve.*, coa.account_code, coa.account_name
-       FROM commission_voucher_expenses cve LEFT JOIN chart_of_accounts coa ON coa.id = cve.account_id
-       WHERE cve.commission_voucher_id = ?`,
-      [req.params.id]
-    );
-    const glImpact = await computeCommissionVoucherGl(cv, lines, expenses);
-    res.json({ ...cv, lines, expenses, gl_impact: glImpact });
+// The printed voucher (asked 2026-10-26), as the source prints it -- a "Payment Voucher": the entry's
+// lines with each released commission's Month beside its Commission Payable debit, the total and
+// the amount in words. A voided voucher still prints its entry, marked VOID (client/src/pages/
+// CommissionVoucherPrint.jsx). can_print on Commission Voucher, or a System Admin.
+router.get('/:id/print', requireAuth, async (req, res, next) => {
+  try {
+    if (!(await isSystemAdmin(req.user.id)) && !(await userCan(req.user.id, ROUTE, 'can_print'))) {
+      return res.status(403).json({ error: 'You do not have permission to print a Commission Voucher.' });
+    }
+    const cv = await loadVoucher(req.params.id);
+    if (!cv) return res.status(404).json({ error: 'Not found' });
+    const rows = cv.status === 'void'
+      ? await computeCommissionVoucherGl({ ...cv, status: 'posted' }, cv.lines, cv.expenses)
+      : cv.gl_impact;
+    // computeCommissionVoucherGl puts one Commission Payable debit per released commission first, in
+    // the lines' order -- so the first N rows take those commissions' months.
+    const released = cv.lines.filter((l) => Math.round(Number(l.released_amount || 0) * 100) !== 0);
+    const entries = rows.map((r, i) => (i < released.length && Number(r.debit) > 0
+      ? { ...r, month: released[i].period_from } : r));
+    res.json({ ...cv, entries });
   } catch (err) { next(err); }
 });
 
@@ -191,16 +293,25 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
     const releaseLines = (Array.isArray(lines) ? lines : []).filter((l) => l.commission_payable_id && Number(l.released_amount) >= 0);
     const preparedExpenses = (Array.isArray(expenses) ? expenses : [])
       .filter((e) => e.account_id && Number(e.amount) !== 0)
-      .map((e) => ({ account_id: e.account_id, description: e.description || null, amount: round2(e.amount) }));
+      .map((e) => ({
+        account_id: e.account_id,
+        description: e.description || null,
+        amount: round2(e.amount),
+        // Only meaningful on Commission Payable; validated (and cleared otherwise) below.
+        applies_to_payable_id: e.applies_to_payable_id || null,
+      }));
     // A voucher needs at least a commission line OR an expense -- an expense-only voucher is a
     // pure refund (no commission released, no payable settled).
     if (!releaseLines.length && !preparedExpenses.length) return res.status(400).json({ error: 'Select a commission or add an expense.' });
+
+    const targetError = await validateExpenseTargets(preparedExpenses, employeeId);
+    if (targetError) return res.status(400).json({ error: targetError });
 
     // Fetch each payable, check it belongs to the employee and isn't void.
     const payableRows = [];
     for (const l of releaseLines) {
       const [[cp]] = await conn.query(
-        `SELECT id, commission_payable_no, employee_id, commissionable_amount, amount_paid, status,
+        `SELECT id, commission_payable_no, employee_id, expected_commission, commissionable_amount, amount_paid, status,
                 YEAR(period_from) AS period_year, MONTH(period_from) AS period_month
          FROM commission_payables WHERE id = ?`, [l.commission_payable_id]);
       if (!cp) return res.status(400).json({ error: 'A selected commission is no longer valid.' });
@@ -213,18 +324,20 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
       commission_payable_id: x.cp.id, period_year: x.cp.period_year, period_month: x.cp.period_month,
     })));
     const prepared = [];
+    const overs = [];
     for (const { cp, released } of payableRows) {
       const unpaid = unpaidMap.get(cp.id) ?? 0;
-      if (released > unpaid + 0.005) {
-        return res.status(409).json({ error: `Released amount for ${cp.commission_payable_no} (${released}) exceeds its commissionable (${unpaid}).` });
-      }
+      if (released > unpaid + 0.005) overs.push({ cp, released, ceiling: unpaid });
       prepared.push({ cp, released });
     }
+    const overError = overReleaseError(overs, req.body);
+    if (overError) return res.status(409).json(overError);
 
     const totalReleased = round2(prepared.reduce((s, p) => s + p.released, 0));
     const expSum = round2(preparedExpenses.reduce((s, e) => s + e.amount, 0));
     const totalPayments = round2(totalReleased + expSum);
     await assertPeriodOpen(dateCreated, 'other_gl', conn);
+    const liveExpected = await liveExpectedByPayable(prepared.map((p) => p.cp.id));
 
     await conn.beginTransaction();
     const [result] = await conn.query(
@@ -236,19 +349,23 @@ router.post('/', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, r
        paymentMethodId || null, cashBankAccountId || null, paymentType || 'full', dateReleased || null, totalPayments, req.user.id]
     );
     const cvId = result.insertId;
-    await conn.query('UPDATE commission_vouchers SET voucher_no = ? WHERE id = ?', [`COMVCH-${cvId}`, cvId]);
+    const cvNo = await assignDocNo(conn, { table: 'commission_vouchers', column: 'voucher_no', prefix: 'COMVCH-', id: cvId });
 
     for (const { cp, released } of prepared) {
       await conn.query('INSERT INTO commission_voucher_lines (commission_voucher_id, commission_payable_id, released_amount) VALUES (?, ?, ?)', [cvId, cp.id, released]);
       // Settle the payable: advance amount_paid, flip status.
       const newPaid = round2(Number(cp.amount_paid) + released);
       await conn.query('UPDATE commission_payables SET amount_paid = ?, status = ?, updated_at = NOW() WHERE id = ?',
-        [newPaid, payableStatus(cp.commissionable_amount, newPaid), cp.id]);
+        [newPaid, payableStatus(liveExpected.get(Number(cp.id)) ?? cp.expected_commission, newPaid), cp.id]);
     }
     for (const e of preparedExpenses) {
-      await conn.query('INSERT INTO commission_voucher_expenses (commission_voucher_id, account_id, description, amount) VALUES (?, ?, ?, ?)', [cvId, e.account_id, e.description, e.amount]);
+      await conn.query(
+        'INSERT INTO commission_voucher_expenses (commission_voucher_id, account_id, description, amount, applies_to_payable_id) VALUES (?, ?, ?, ?, ?)',
+        [cvId, e.account_id, e.description, e.amount, e.applies_to_payable_id],
+      );
     }
-    await logAudit(conn, { cvId, userId: req.user.id, eventType: 'Created', fieldName: 'voucher_no', newValue: `COMVCH-${cvId}` });
+    await logAudit(conn, { cvId, userId: req.user.id, eventType: 'Created', fieldName: 'voucher_no', newValue: cvNo });
+    await logOverReleases(conn, cvId, req.user.id, overs);
     await conn.commit();
 
     const [[row]] = await pool.query('SELECT * FROM commission_vouchers WHERE id = ?', [cvId]);
@@ -281,8 +398,17 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
     const releaseLines = (Array.isArray(lines) ? lines : []).filter((l) => l.commission_payable_id && Number(l.released_amount) >= 0);
     const preparedExpenses = (Array.isArray(expenses) ? expenses : [])
       .filter((e) => e.account_id && Number(e.amount) !== 0)
-      .map((e) => ({ account_id: e.account_id, description: e.description || null, amount: round2(e.amount) }));
+      .map((e) => ({
+        account_id: e.account_id,
+        description: e.description || null,
+        amount: round2(e.amount),
+        // Only meaningful on Commission Payable; validated (and cleared otherwise) below.
+        applies_to_payable_id: e.applies_to_payable_id || null,
+      }));
     if (!releaseLines.length && !preparedExpenses.length) return res.status(400).json({ error: 'Select a commission or add an expense.' });
+
+    const targetError = await validateExpenseTargets(preparedExpenses, employeeId);
+    if (targetError) return res.status(400).json({ error: targetError });
 
     // This voucher's existing releases, to give back their room in the ceiling check.
     const [oldLines] = await conn.query('SELECT commission_payable_id AS pid, released_amount FROM commission_voucher_lines WHERE commission_voucher_id = ?', [cvId]);
@@ -292,7 +418,7 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
     const payableRows = [];
     for (const l of releaseLines) {
       const [[cp]] = await conn.query(
-        `SELECT id, commission_payable_no, employee_id, commissionable_amount, amount_paid, status,
+        `SELECT id, commission_payable_no, employee_id, expected_commission, commissionable_amount, amount_paid, status,
                 YEAR(period_from) AS period_year, MONTH(period_from) AS period_month
          FROM commission_payables WHERE id = ?`, [l.commission_payable_id]);
       if (!cp) return res.status(400).json({ error: 'A selected commission is no longer valid.' });
@@ -304,28 +430,33 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
       commission_payable_id: x.cp.id, period_year: x.cp.period_year, period_month: x.cp.period_month,
     })));
     const prepared = [];
+    const overs = [];
     for (const { cp, released } of payableRows) {
-      const ceiling = round2((unpaidMap.get(cp.id) ?? 0) + (ownReleased.get(Number(cp.id)) || 0));
-      if (released > ceiling + 0.005) {
-        return res.status(409).json({ error: `Released amount for ${cp.commission_payable_no} (${released}) exceeds its commissionable (${ceiling}).` });
-      }
+      // The month's commission can drop after the release (a cancelled order, a corrected line), leaving
+      // this voucher's existing release above the ceiling: keeping or lowering it needs no confirmation.
+      const own = ownReleased.get(Number(cp.id)) || 0;
+      const ceiling = round2(Math.max((unpaidMap.get(cp.id) ?? 0) + own, own));
+      if (released > ceiling + 0.005) overs.push({ cp, released, ceiling });
       prepared.push({ cp, released });
     }
+    const overError = overReleaseError(overs, req.body);
+    if (overError) return res.status(409).json(overError);
 
     const totalReleased = round2(prepared.reduce((s, p) => s + p.released, 0));
     const expSum = round2(preparedExpenses.reduce((s, e) => s + e.amount, 0));
     const totalPayments = round2(totalReleased + expSum);
     await assertPeriodOpen(existing.date_created, 'other_gl', conn);
     await assertPeriodOpen(dateCreated || existing.date_created, 'other_gl', conn);
+    const liveExpected = await liveExpectedByPayable([...oldLines.map((l) => l.pid), ...prepared.map((p) => p.cp.id)]);
 
     await conn.beginTransaction();
     // Reverse the old settlement, then drop the old lines/expenses.
     for (const l of oldLines) {
-      const [[cp]] = await conn.query('SELECT commissionable_amount, amount_paid FROM commission_payables WHERE id = ?', [l.pid]);
+      const [[cp]] = await conn.query('SELECT expected_commission, commissionable_amount, amount_paid FROM commission_payables WHERE id = ?', [l.pid]);
       if (!cp) continue;
       const back = round2(Number(cp.amount_paid) - Number(l.released_amount));
       await conn.query('UPDATE commission_payables SET amount_paid = ?, status = ?, updated_at = NOW() WHERE id = ?',
-        [back, payableStatus(cp.commissionable_amount, back), l.pid]);
+        [back, payableStatus(liveExpected.get(Number(l.pid)) ?? cp.expected_commission, back), l.pid]);
     }
     await conn.query('DELETE FROM commission_voucher_lines WHERE commission_voucher_id = ?', [cvId]);
     await conn.query('DELETE FROM commission_voucher_expenses WHERE commission_voucher_id = ?', [cvId]);
@@ -341,15 +472,19 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
     for (const { cp, released } of prepared) {
       await conn.query('INSERT INTO commission_voucher_lines (commission_voucher_id, commission_payable_id, released_amount) VALUES (?, ?, ?)', [cvId, cp.id, released]);
       // Re-read post-reversal amount_paid before advancing.
-      const [[cur]] = await conn.query('SELECT commissionable_amount, amount_paid FROM commission_payables WHERE id = ?', [cp.id]);
+      const [[cur]] = await conn.query('SELECT expected_commission, commissionable_amount, amount_paid FROM commission_payables WHERE id = ?', [cp.id]);
       const newPaid = round2(Number(cur.amount_paid) + released);
       await conn.query('UPDATE commission_payables SET amount_paid = ?, status = ?, updated_at = NOW() WHERE id = ?',
-        [newPaid, payableStatus(cur.commissionable_amount, newPaid), cp.id]);
+        [newPaid, payableStatus(liveExpected.get(Number(cp.id)) ?? cur.expected_commission, newPaid), cp.id]);
     }
     for (const e of preparedExpenses) {
-      await conn.query('INSERT INTO commission_voucher_expenses (commission_voucher_id, account_id, description, amount) VALUES (?, ?, ?, ?)', [cvId, e.account_id, e.description, e.amount]);
+      await conn.query(
+        'INSERT INTO commission_voucher_expenses (commission_voucher_id, account_id, description, amount, applies_to_payable_id) VALUES (?, ?, ?, ?, ?)',
+        [cvId, e.account_id, e.description, e.amount, e.applies_to_payable_id],
+      );
     }
     await logAudit(conn, { cvId, userId: req.user.id, eventType: 'Updated', fieldName: 'total_payments', oldValue: existing.total_payments, newValue: totalPayments });
+    await logOverReleases(conn, cvId, req.user.id, overs);
     await conn.commit();
 
     const [[row]] = await pool.query('SELECT * FROM commission_vouchers WHERE id = ?', [cvId]);
@@ -361,7 +496,7 @@ router.put('/:id', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req
   } finally { conn.release(); }
 });
 
-router.put('/:id/void', requireAuth, requirePermission(ROUTE, 'can_edit'), async (req, res, next) => {
+router.put('/:id/void', requireAuth, requirePermission(ROUTE, 'can_void'), async (req, res, next) => {
   const conn = await pool.getConnection();
   try {
     const [[cv]] = await conn.query('SELECT status, date_created FROM commission_vouchers WHERE id = ?', [req.params.id]);
@@ -369,15 +504,17 @@ router.put('/:id/void', requireAuth, requirePermission(ROUTE, 'can_edit'), async
     if (!cv) return res.status(404).json({ error: 'Not found' });
     if (cv.status === 'void') return res.status(409).json({ error: 'This Commission Voucher is already void.' });
 
-    await conn.beginTransaction();
     // Reverse the settlement: pull each released amount back off its payable.
     const [lines] = await conn.query('SELECT * FROM commission_voucher_lines WHERE commission_voucher_id = ?', [req.params.id]);
+    const liveExpected = await liveExpectedByPayable(lines.map((l) => l.commission_payable_id));
+
+    await conn.beginTransaction();
     for (const l of lines) {
-      const [[cp]] = await conn.query('SELECT commissionable_amount, amount_paid FROM commission_payables WHERE id = ?', [l.commission_payable_id]);
+      const [[cp]] = await conn.query('SELECT expected_commission, commissionable_amount, amount_paid FROM commission_payables WHERE id = ?', [l.commission_payable_id]);
       if (!cp) continue;
       const newPaid = round2(Number(cp.amount_paid) - Number(l.released_amount));
       await conn.query('UPDATE commission_payables SET amount_paid = ?, status = ?, updated_at = NOW() WHERE id = ?',
-        [newPaid, payableStatus(cp.commissionable_amount, newPaid), l.commission_payable_id]);
+        [newPaid, payableStatus(liveExpected.get(Number(l.commission_payable_id)) ?? cp.expected_commission, newPaid), l.commission_payable_id]);
     }
     await conn.query("UPDATE commission_vouchers SET status = 'void', voided_by_user_id = ?, voided_at = NOW() WHERE id = ?", [req.user.id, req.params.id]);
     await logAudit(conn, { cvId: req.params.id, userId: req.user.id, eventType: 'Cancelled', fieldName: 'status', oldValue: cv.status, newValue: 'void' });

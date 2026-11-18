@@ -76,6 +76,7 @@ const NAV_STRUCTURE = [
       { route: '/pms-job-types', label: 'PMS Job Types' },
       { route: '/inventory', label: 'Inventory Items' },
       { route: '/service-items', label: 'Service Items' },
+      { route: '/non-inventories', label: 'Non-Inventories' },
       { route: '/lookups', label: 'Lookups' },
       { route: '/transaction-settings', label: 'Transaction Settings' },
     ],
@@ -142,6 +143,7 @@ const NAV_STRUCTURE = [
       { route: '/purchase-requisitions', label: 'Purchase Requisitions' },
       { route: '/place-order-form', label: 'Place Order Form' },
       { route: '/purchase-orders', label: 'Purchase Orders' },
+      { route: '/receiving-reports', label: 'Receiving Report' },
     ],
   },
   {

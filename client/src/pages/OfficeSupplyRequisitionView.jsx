@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
+import { usePeriodLocked } from '../utils/periodLock';
 import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate, displayAuditTime } from '../utils/dates';
 
 const STATUS_LABELS = { open: 'Open', partially_served: 'Partially Served', served: 'Served', cancelled: 'Cancelled' };
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : ''; }
+function formatDate(v) { return v ? displayDate(v) : ''; }
 
 // Fulfill modal: serve the remaining qty per line (defaults to the remaining balance), drawing it
 // down from this requisition location's on-hand.
@@ -85,10 +87,13 @@ export default function OfficeSupplyRequisitionView() {
     finally { setBusy(false); }
   }
 
+  // Closed accounting period: no Edit / Void / Cancel (utils/periodLock.js; the server refuses them too).
+  const periodLocked = usePeriodLocked(o?.date_created, 'non_gl');
+
   if (loading || !o) return <LoadingSpinner />;
   const lines = o.lines || [];
   const isOpen = o.status === 'open' || o.status === 'partially_served';
-  const canEdit = can('/office-supply-requisitions', 'can_edit');
+  const canEdit = (can('/office-supply-requisitions', 'can_edit') && !periodLocked);
   const canFulfill = can('/office-supply-requisitions', 'can_approve');
 
   return (
@@ -96,14 +101,20 @@ export default function OfficeSupplyRequisitionView() {
       <div className="page-header">
         <div />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate('/office-supply-requisitions')}>Back to Lists</button>
-          {canEdit && o.status === 'open' && <button className="btn btn-sm btn-primary" onClick={() => navigate(`/office-supply-requisitions/${id}/edit`)}>Edit</button>}
+          <Link className="btn btn-sm" to={'/office-supply-requisitions'}>Back to Lists</Link>
+          {canEdit && o.status === 'open' && <Link className="btn btn-sm btn-primary" to={`/office-supply-requisitions/${id}/edit`}>Edit</Link>}
           {canFulfill && isOpen && <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => setShowFulfill(true)}>Fulfill</button>}
           {canEdit && o.status !== 'cancelled' && o.status !== 'served' && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleCancel}>Cancel</button>}
         </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+      {/* Closed accounting period (shown on the page itself, 2026-10-14). */}
+      {periodLocked && (
+        <div className="warning-banner" style={{ marginBottom: 12 }}>
+          The accounting period for this transaction is closed ({periodLocked}), so it can no longer be edited, voided or cancelled.
+        </div>
+      )}
 
       <div className="estimate-banner">
         <div className="estimate-banner-title">
@@ -120,6 +131,7 @@ export default function OfficeSupplyRequisitionView() {
           </div>
           <div>
             <div>Requestor : <span className="hi">{o.requestor_name || ''}</span></div>
+            <div>Department : <span className="hi">{o.department_name || ''}</span></div>
           </div>
           <div>
             <div>Memo : <span className="hi">{o.memo || ''}</span></div>
@@ -168,7 +180,7 @@ export default function OfficeSupplyRequisitionView() {
                 {(o.fulfillments || []).map((fu) => (
                   <tr key={fu.id}>
                     <td>{formatDate(fu.date_created)}</td>
-                    <td><button type="button" className="link-btn" onClick={() => navigate(`/office-supply-requisitions/fulfillments/${fu.id}`)}>{fu.osrf_no}</button></td>
+                    <td><Link className="link-btn" to={`/office-supply-requisitions/fulfillments/${fu.id}`}>{fu.osrf_no}</Link></td>
                     <td style={{ textAlign: 'right' }}>{Number(fu.total_amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                     <td>{fu.status}</td>
                   </tr>
@@ -183,7 +195,7 @@ export default function OfficeSupplyRequisitionView() {
         <div className="card">
           <DataTable
             columns={[
-              { key: 'set_at', label: 'When', render: (r) => new Date(r.set_at).toLocaleString() },
+              { key: 'set_at', label: 'When', render: (r) => displayAuditTime(r.set_at) },
               { key: 'set_by_name', label: 'Set By' }, { key: 'event_type', label: 'Type' },
               { key: 'field_name', label: 'Field' }, { key: 'old_value', label: 'Old Value' }, { key: 'new_value', label: 'New Value' },
             ]}

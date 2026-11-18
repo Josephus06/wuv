@@ -4,6 +4,8 @@ import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
+import useAutoSearch from '../utils/useAutoSearch';
+import SearchInput from '../components/SearchInput';
 
 // Mirrors the real system's "Accounting > Chart of Accounts" screen -- fully migrated
 // from the live site (276 accounts, real parent/child hierarchy). The real screen also
@@ -37,6 +39,7 @@ export default function ChartOfAccounts() {
     setPage(1);
     load();
   }
+  useAutoSearch(search, runSearch);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
@@ -44,14 +47,14 @@ export default function ChartOfAccounts() {
     <div>
       <div className="page-header">
         <h1>Chart of Accounts</h1>
-        {can('/chart-of-accounts', 'can_add') && <button className="btn btn-primary" onClick={() => navigate('/chart-of-accounts/new')}>Add New</button>}
+        {can('/chart-of-accounts', 'can_add') && <Link className="btn btn-primary" to={'/chart-of-accounts/new'}>Add New</Link>}
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Account code or title..." />
+            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Account code or title..." />
           </div>
         </div>
         <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={runSearch}>Search</button>
@@ -84,7 +87,7 @@ export default function ChartOfAccounts() {
                       <td data-label="Type">{row.coa_account_type}</td>
                       <td data-label="Sub-Type">{row.account_sub_type}</td>
                       <td style={{ display: 'flex', gap: 6 }}>
-                        {can('/chart-of-accounts', 'can_edit') && <button className="btn btn-sm" onClick={() => navigate(`/chart-of-accounts/${row.id}/edit`)}>Update</button>}
+                        {can('/chart-of-accounts', 'can_edit') && <Link className="btn btn-sm" to={`/chart-of-accounts/${row.id}/edit`}>Update</Link>}
                         <Link className="btn btn-sm btn-primary" to={`/chart-of-accounts/${row.id}`}>View</Link>
                       </td>
                     </tr>

@@ -4,13 +4,17 @@ import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate } from '../utils/dates';
+import useAutoSearch from '../utils/useAutoSearch';
+import SearchInput from '../components/SearchInput';
 
 const PAGE_SIZE = 15;
 function money(v) { const n = Number(v); return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'; }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : ''; }
+function formatDate(v) { return v ? displayDate(v) : ''; }
 
 export default function FundTransfers() {
-  const { can } = useAuth();
+  const { can, user } = useAuth();
+  const canPrint = can('/fund-transfers', 'can_print') || user?.account_type === 'System Admin';
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -29,6 +33,7 @@ export default function FundTransfers() {
 
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   function runSearch() { setPage(1); load(); }
+  useAutoSearch(search, runSearch);
 
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -44,7 +49,7 @@ export default function FundTransfers() {
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="FT No, Account or Memo..." />
+            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="FT No, Account or Memo..." />
           </div>
           <div className="field">
             <label>Date Created (as of)</label>
@@ -71,7 +76,10 @@ export default function FundTransfers() {
                     <td data-label="To Account">{row.to_account_name}</td>
                     <td data-label="Prepared By">{row.prepared_by_name}</td>
                     <td data-label="Total Amount" style={{ textAlign: 'right' }}>{money(row.amount)}</td>
-                    <td><Link className="btn btn-sm btn-primary" to={`/fund-transfers/${row.id}`}>View</Link></td>
+                    <td style={{ display: 'flex', gap: 6 }}>
+                      {canPrint && <button className="btn btn-sm" onClick={() => window.open(`/fund-transfers/${row.id}/print`, '_blank')}>Print</button>}
+                      <Link className="btn btn-sm btn-primary" to={`/fund-transfers/${row.id}`}>View</Link>
+                    </td>
                   </tr>
                 ))}
               </tbody>

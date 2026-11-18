@@ -4,6 +4,11 @@ import api from '../api/client';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
 
+import { displayDate } from '../utils/dates';
+import useAutoSearch from '../utils/useAutoSearch';
+import { CustomerLink } from '../components/PartyLink';
+import SearchInput from '../components/SearchInput';
+
 const PAGE_SIZE = 10;
 const STATUS_LABELS = { open: 'Open', converted: 'Converted', void: 'Void' };
 
@@ -11,37 +16,80 @@ function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? String(v).slice(0, 10) : ''; }
+function formatDate(v) { return v ? displayDate(String(v).slice(0, 10)) : ''; }
 
 // Flat list of every Delivery Ticket. Converted tickets keep their row and link to the
 // Invoice they became -- the ticket is the record of what left, so it stays visible after
 // billing rather than disappearing from the list.
 export default function DeliveryTickets() {
   const [rows, setRows] = useState([]);
+  // The server now decides the page, so the total has to come from it too -- rows.length is
+  // only ever the ten rows on screen.
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
+  // Period From / As of Date: inclusive bounds on Date Created, applied on Search.
+  const [dateFrom, setDateFrom] = useState('');
+  const [asOf, setAsOf] = useState('');
   const [page, setPage] = useState(1);
 
-  async function load() {
-    setLoading(true);
+  function listParams() {
     const params = {};
     if (status) params.status = status;
     if (search) params.search = search;
-    const { data } = await api.get('/delivery-tickets', { params });
-    setRows(data);
-    setLoading(false);
+    if (dateFrom) params.date_from = dateFrom;
+    if (asOf) params.as_of = asOf;
+    return params;
   }
 
-  useEffect(() => { setPage(1); load(); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Extract: every ticket under the filters above, as a workbook (same params as the list).
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
+  async function runExport() {
+    setExporting(true); setExportError('');
+    try {
+      const { data } = await api.get('/delivery-tickets/export', { params: listParams(), responseType: 'blob' });
+      const url = URL.createObjectURL(data);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'delivery-tickets.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setExportError('Could not extract the delivery tickets.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  // Asks the server for ONE page. This used to fetch every row and slice it here, which meant
+  // downloading the whole table to display ten of it -- and it made the search box a lie, since
+  // it could only match rows already downloaded. Both now happen server-side.
+  async function load(toPage = page) {
+    setLoading(true);
+    const params = { ...listParams(), page: toPage, limit: PAGE_SIZE };
+    try {
+      const { data } = await api.get('/delivery-tickets', { params });
+      setRows(data.rows || []);
+      setTotal(Number(data.total) || 0);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Every one of these changes which rows the SERVER should return, so each has to refetch --
+  // paging is no longer something the browser can answer out of what it already holds.
+  useEffect(() => { setPage(1); load(1); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(page); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function runSearch() {
     setPage(1);
-    load();
+    load(1);
   }
+  useAutoSearch(search, runSearch);
 
-  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-  const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pageRows = rows;
 
   return (
     <div>
@@ -53,7 +101,7 @@ export default function DeliveryTickets() {
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input
+            <SearchInput
               value={search} onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && runSearch()}
               placeholder="DT #, SO #, Customer or PO #..."
@@ -68,8 +116,22 @@ export default function DeliveryTickets() {
               <option value="void">Void</option>
             </select>
           </div>
+          <div className="field">
+            <label>Period From</label>
+            <input type="date" value={dateFrom} max={asOf || undefined} onChange={(e) => setDateFrom(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} />
+          </div>
+          <div className="field">
+            <label>As of Date</label>
+            <input type="date" value={asOf} min={dateFrom || undefined} onChange={(e) => setAsOf(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} />
+          </div>
         </div>
-        <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={runSearch}>Search</button>
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn btn-primary" onClick={runSearch}>Search</button>
+          <button className="btn" disabled={exporting} onClick={runExport} title="Download every delivery ticket under the filters above">
+            {exporting ? 'Extracting...' : 'Extract'}
+          </button>
+          {exportError && <span style={{ color: 'var(--danger)' }}>{exportError}</span>}
+        </div>
       </div>
 
       <div className="card">
@@ -108,7 +170,7 @@ export default function DeliveryTickets() {
                     <td data-label="Date Created">{formatDate(row.date_created)}</td>
                     <td data-label="Date Due">{formatDate(row.date_due)}</td>
                     <td data-label="Office Location">{row.office_location_name}</td>
-                    <td data-label="Customer">{row.customer_name}</td>
+                    <td data-label="Customer"><CustomerLink id={row.customer_id} name={row.customer_name} /></td>
                     <td data-label="Sales Rep">{row.sales_rep_name}</td>
                     <td data-label="Department">{row.department_name}</td>
                     <td data-label="Net of Tax">{money(row.net_of_tax)}</td>

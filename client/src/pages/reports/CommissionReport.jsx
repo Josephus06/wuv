@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import api from '../../api/client';
 import EntityPicker from '../../components/EntityPicker';
 import LoadingSpinner from '../../components/LoadingSpinner';
+import Modal from '../../components/Modal';
+import CommissionPayableCell from '../../components/CommissionPayableCell';
 import { money } from './CoaTreeRows';
 
 function currentYear() { return new Date().getFullYear(); }
@@ -20,6 +22,18 @@ export default function CommissionReport() {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // Released Commission drill-down: the vouchers behind one month's figure.
+  const [released, setReleased] = useState(null);
+
+  async function openReleased(row) {
+    setReleased({ month_name: row.month_name, loading: true, rows: [] });
+    try {
+      const { data } = await api.get('/reports/commission/released-detail', { params: { employeeId: report.employee_id ?? salesRep?.id, year, month: row.month } });
+      setReleased({ month_name: row.month_name, ...data });
+    } catch (err) {
+      setReleased({ month_name: row.month_name, rows: [], error: err.response?.data?.error || 'Could not load the vouchers.' });
+    }
+  }
 
   async function runReport(repId, yr = year) {
     if (!repId) { setError('Select a Sales Rep first.'); return; }
@@ -124,6 +138,7 @@ export default function CommissionReport() {
               <thead>
                 <tr>
                   <th rowSpan={2}>Month</th>
+                  <th rowSpan={2}>CP #</th>
                   <th rowSpan={2} style={{ textAlign: 'right' }}>Quota</th>
                   <th rowSpan={2}>Sales Division</th>
                   <th rowSpan={2} style={{ textAlign: 'right' }}>Weighted Sales</th>
@@ -145,6 +160,7 @@ export default function CommissionReport() {
                 {report.rows.map((r) => (
                   <tr key={r.month}>
                     <td data-label="Month">{r.month_name}</td>
+                    <td data-label="CP #"><CommissionPayableCell row={r} /></td>
                     <td data-label="Quota" style={{ textAlign: 'right' }}>{money(r.quota)}</td>
                     <td data-label="Sales Division">{r.division_name || ''}</td>
                     <td data-label="Weighted Sales" style={{ textAlign: 'right' }}>{money(r.weighted_sales)}</td>
@@ -153,7 +169,11 @@ export default function CommissionReport() {
                     <td data-label="Total JO Passing" style={{ textAlign: 'right' }}>{money(r.passing_gp_total)}</td>
                     <td data-label="Expected Commission" style={{ textAlign: 'right' }}>{money(r.expected_commission)}</td>
                     <td data-label="Confirmed Commission" style={{ textAlign: 'right' }}>{money(r.confirmed_commission)}</td>
-                    <td data-label="Released Commission" style={{ textAlign: 'right' }}>{money(r.released_commission)}</td>
+                    <td data-label="Released Commission" style={{ textAlign: 'right' }}>
+                      {Number(r.released_commission) !== 0
+                        ? <button type="button" className="link-btn" title="Show the vouchers" onClick={() => openReleased(r)}>{money(r.released_commission)}</button>
+                        : money(r.released_commission)}
+                    </td>
                     <td data-label="Deducted" style={{ textAlign: 'right' }}>{r.expenses_deducted ? money(r.expenses_deducted) : ''}</td>
                     <td data-label="Refunded" style={{ textAlign: 'right' }}>{r.expenses_refunded ? money(r.expenses_refunded) : ''}</td>
                     <td data-label="Unpaid Commission" style={{ textAlign: 'right' }}>{money(r.unpaid_commission)}</td>
@@ -164,6 +184,7 @@ export default function CommissionReport() {
                 <tfoot>
                   <tr style={{ fontWeight: 700 }}>
                     <td>Total</td>
+                    <td></td>
                     <td></td>
                     <td></td>
                     <td style={{ textAlign: 'right' }}>{money(totals.weighted_sales)}</td>
@@ -182,10 +203,46 @@ export default function CommissionReport() {
             </table>
           </div>
           <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
-            Released Commission is sourced from the employee&apos;s Commission Vouchers (net of expenses = each voucher&apos;s total); Unpaid = Confirmed − Released.
-            A voucher expense is a Deduction (negative) that waterfalls from the earliest month it paid, or a Refund (positive) added to it.
+            Released Commission is what the employee&apos;s Commission Vouchers paid against the month, before deductions (as the source system shows it) &mdash; click it to see the vouchers. Unpaid = Confirmed − Released.
+            Deducted / Refunded show the vouchers&apos; expense adjustments for information; they do not reduce Released.
+            CP # is the month&apos;s Commission Payable; <span style={{ color: '#b91c1c', fontWeight: 600 }}>No CP</span> means none has been created yet: the month cannot be released on a Commission Voucher, and its Confirmed and Unpaid Commission are not shown until one is.
           </p>
         </div>
+      )}
+
+      {released && (
+        <Modal title={`Released Commission — ${released.month_name} ${year}`} onClose={() => setReleased(null)} large>
+          {released.loading ? <LoadingSpinner /> : released.error ? <div className="error-banner">{released.error}</div> : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Voucher #</th><th>Date</th><th>Commission Payable</th>
+                    <th style={{ textAlign: 'right' }}>Released for {released.month_name}</th>
+                    <th style={{ textAlign: 'right' }}>Voucher Total</th>
+                    <th style={{ textAlign: 'right' }}>Voucher Deductions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {released.rows.length === 0 && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center' }}>No vouchers.</td></tr>}
+                  {released.rows.map((v, i) => (
+                    <tr key={`${v.voucher_id}-${v.payable_id}-${i}`}>
+                      <td><button type="button" className="link-btn" onClick={() => window.open(`/commission-vouchers/${v.voucher_id}`, '_blank')}>{v.voucher_no}</button></td>
+                      <td>{String(v.date_created).slice(0, 10)}</td>
+                      <td><button type="button" className="link-btn" onClick={() => window.open(`/commission-payables/${v.payable_id}`, '_blank')}>{v.commission_payable_no}</button></td>
+                      <td style={{ textAlign: 'right' }}>{money(v.released_amount)}</td>
+                      <td style={{ textAlign: 'right' }}>{money(v.total_payments)}</td>
+                      <td style={{ textAlign: 'right' }}>{v.voucher_deductions ? money(v.voucher_deductions) : ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ fontWeight: 700 }}><td colSpan={3}>Total released</td><td style={{ textAlign: 'right' }}>{money(released.total)}</td><td colSpan={2}></td></tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </Modal>
       )}
     </div>
   );

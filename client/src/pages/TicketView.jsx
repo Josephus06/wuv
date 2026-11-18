@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import EntityPicker from '../components/EntityPicker';
+import Modal from '../components/Modal';
+import TicketAttachments from '../components/TicketAttachments';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { parseUtc } from '../utils/datetime';
 
-const STATUS_LABELS = { open: 'Open', in_progress: 'In Progress', resolved: 'Resolved', closed: 'Closed' };
-const STATUS_BADGE = { open: 'badge-info', in_progress: 'badge-muted', resolved: 'badge-success', closed: 'badge-success' };
+const STATUS_LABELS = { open: 'Open', in_progress: 'In Progress', resolved: 'Resolved', closed: 'Closed', declined: 'Declined' };
+const STATUS_BADGE = { open: 'badge-info', in_progress: 'badge-muted', resolved: 'badge-success', closed: 'badge-success', declined: 'badge-danger' };
 
 function formatDateTime(v) {
-  return v ? new Date(v).toLocaleString('en-US', { month: 'short', day: '2-digit', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
+  // UTC in the database, no marker on the wire -- see utils/datetime.js.
+  return v ? parseUtc(v).toLocaleString('en-US', { month: 'short', day: '2-digit', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
 }
 
 // Full-page equivalent of the chat widget's ticket thread (ChatWidget.jsx) -- reached
@@ -28,6 +32,9 @@ export default function TicketView() {
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [declining, setDeclining] = useState(false);
+  const [declineReason, setDeclineReason] = useState('');
+  const [declineError, setDeclineError] = useState('');
   const bottomRef = useRef(null);
 
   async function load() {
@@ -107,6 +114,25 @@ export default function TicketView() {
     }
   }
 
+  // Declining is the one approval action that asks a question first: the server refuses an empty
+  // reason, so demanding it here rather than after a round trip keeps the refusal in one step.
+  async function handleDecline() {
+    const reason = declineReason.trim();
+    if (!reason) { setDeclineError('Say why -- the requester is told this, and it decides whether they rework it or drop it.'); return; }
+    setBusy(true);
+    try {
+      await api.put(`/tickets/${id}/decline`, { reason });
+      setDeclining(false);
+      setDeclineReason('');
+      setDeclineError('');
+      await load();
+    } catch (err) {
+      setDeclineError(err.response?.data?.error || 'Decline failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleForward() {
     if (!confirm(`Forward ${ticket.ticket_no} to the General Manager for approval? It won't be assignable until they sign off.`)) return;
     try {
@@ -143,15 +169,18 @@ export default function TicketView() {
   const canDelete = can('/tickets', 'can_delete');
   const canAct = canManage || isAssignee;
   const isClosedOut = ticket.status === 'resolved' || ticket.status === 'closed';
-  const isPending = !!ticket.approver_names && !ticket.approved_at;
-  const isGmPending = !!ticket.forwarded_to_gm_at && !ticket.gm_approved_at;
-  const isBlocked = isPending || isGmPending;
+  const isDeclined = !!ticket.declined_at;
+  const isPending = !!ticket.approver_names && !ticket.approved_at && !isDeclined;
+  const isGmPending = !!ticket.forwarded_to_gm_at && !ticket.gm_approved_at && !isDeclined;
+  // A declined ticket is finished, not stuck: nothing may be assigned, forwarded or restatused on
+  // it, which is what the server enforces too.
+  const isBlocked = isPending || isGmPending || isDeclined;
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <button className="btn btn-sm" onClick={() => navigate('/tickets')}>← Back to Tickets</button>
+          <Link className="btn btn-sm" to={'/tickets'}>← Back to Tickets</Link>
           <h1 style={{ marginTop: 8 }}>{ticket.ticket_no}</h1>
         </div>
         <span className={`badge ${STATUS_BADGE[ticket.status] || 'badge-muted'}`}>{STATUS_LABELS[ticket.status] || ticket.status}</span>
@@ -166,6 +195,13 @@ export default function TicketView() {
         {ticket.approved_at && ticket.approved_by_name && (
           <div className="muted" style={{ marginBottom: 12, fontSize: 13 }}>
             ✓ Approved by {ticket.approved_by_name} on {formatDateTime(ticket.approved_at)}
+          </div>
+        )}
+        {isDeclined && (
+          <div className="warning-banner" style={{ marginBottom: 12 }}>
+            ✕ Declined by {ticket.declined_by_name || 'an approver'} on {formatDateTime(ticket.declined_at)}
+            {ticket.decline_reason ? ` — ${ticket.decline_reason}` : ''}
+            <div style={{ marginTop: 4, fontSize: 13 }}>This ticket is closed to further work. Raise a new one to pursue it.</div>
           </div>
         )}
         {isGmPending && (
@@ -186,14 +222,16 @@ export default function TicketView() {
         </div>
         <div className="field"><label>Subject</label><div>{ticket.subject}</div></div>
 
-        {ticket.is_my_approval && !ticket.approved_at && (
+        {ticket.is_my_approval && !ticket.approved_at && !isDeclined && (
           <div className="modal-actions" style={{ justifyContent: 'flex-start', marginTop: 12 }}>
-            <button className="btn btn-sm btn-primary" onClick={handleApprove}>Approve</button>
+            <button className="btn btn-sm btn-primary" disabled={busy} onClick={handleApprove}>Approve</button>
+            <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => { setDeclineError(''); setDeclining(true); }}>Decline</button>
           </div>
         )}
         {ticket.is_gm && isGmPending && (
           <div className="modal-actions" style={{ justifyContent: 'flex-start', marginTop: 12 }}>
-            <button className="btn btn-sm btn-primary" onClick={handleGmApprove}>GM Approve</button>
+            <button className="btn btn-sm btn-primary" disabled={busy} onClick={handleGmApprove}>GM Approve</button>
+            <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => { setDeclineError(''); setDeclining(true); }}>GM Decline</button>
           </div>
         )}
 
@@ -230,6 +268,29 @@ export default function TicketView() {
           </div>
         )}
       </div>
+
+      {declining && (
+        <Modal title={`Decline ${ticket.ticket_no}`} onClose={() => setDeclining(false)}>
+          <div className="field">
+            <label>Reason</label>
+            <textarea
+              rows={4} maxLength={500} autoFocus value={declineReason}
+              placeholder="Why is this being refused? The requester is shown exactly this."
+              onChange={(e) => { setDeclineReason(e.target.value); setDeclineError(''); }}
+            />
+            <small className="muted">{500 - declineReason.length} characters left. Declining is final -- the ticket cannot be approved, assigned or reopened afterwards.</small>
+          </div>
+          {declineError && <div className="warning-banner" style={{ marginBottom: 12 }}>{declineError}</div>}
+          <div className="modal-actions">
+            <button className="btn btn-sm" disabled={busy} onClick={() => setDeclining(false)}>Cancel</button>
+            <button className="btn btn-sm btn-danger" disabled={busy} onClick={handleDecline}>Decline Ticket</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Above the conversation rather than below it: the picture is usually the point of
+          the ticket, and burying it under a thread means it is read last. */}
+      <TicketAttachments ticketId={id} currentUserId={user?.id} isAdmin={user?.account_type === 'System Admin'} />
 
       <div className="card">
         <h3 style={{ marginTop: 0 }}>Conversation</h3>

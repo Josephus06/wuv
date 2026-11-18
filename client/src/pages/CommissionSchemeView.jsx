@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDateTime } from '../utils/dates';
 
 function money(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDateTime(v) { return v ? new Date(v).toLocaleString() : '—'; }
+function formatDateTime(v) { return v ? displayDateTime(v) : '—'; }
 
 // Mirrors the real Commission Table detail: the scheme name in a banner, a Schemes tab
 // holding the bracket ladder (Total Weighted Sales range -> Sales Credit/Commission
@@ -92,7 +93,7 @@ export default function CommissionSchemeView() {
       <div className="page-header">
         <div />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate('/commission-schemes')}>Back</button>
+          <Link className="btn btn-sm" to={'/commission-schemes'}>Back</Link>
           {canEdit && !editing && <button className="btn btn-sm btn-primary" onClick={startEdit}>Edit</button>}
           {editing && <button className="btn btn-sm btn-primary" disabled={saving} onClick={save}>{saving ? 'Saving...' : 'Save'}</button>}
           {editing && <button className="btn btn-sm" onClick={cancelEdit}>Cancel</button>}

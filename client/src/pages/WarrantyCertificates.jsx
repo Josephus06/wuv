@@ -4,10 +4,14 @@ import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { displayDate } from '../utils/dates';
+import useAutoSearch from '../utils/useAutoSearch';
+import { CustomerLink } from '../components/PartyLink';
+import SearchInput from '../components/SearchInput';
 
 const PAGE_SIZE = 15;
 const STATUS_LABELS = { pending_approval: 'Pending Approval', approved: 'Approved', voided: 'Voided' };
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : ''; }
+function formatDate(v) { return v ? displayDate(v) : ''; }
 
 export default function WarrantyCertificates() {
   const { can } = useAuth();
@@ -29,6 +33,7 @@ export default function WarrantyCertificates() {
 
   useEffect(() => { setPage(1); load(); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
   function runSearch() { setPage(1); load(); }
+  useAutoSearch(search, runSearch);
 
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -44,7 +49,7 @@ export default function WarrantyCertificates() {
         <div className="filter-grid">
           <div className="field">
             <label>General Searching</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Warranty #, SO #, Customer or Project..." />
+            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearch()} placeholder="Warranty #, SO #, Customer or Project..." />
           </div>
           <div className="field">
             <label>Status</label>
@@ -73,7 +78,7 @@ export default function WarrantyCertificates() {
                     <td data-label="Warranty #">{row.wc_no}</td>
                     <td data-label="Date">{formatDate(row.date_created)}</td>
                     <td data-label="Sales Order">{row.sales_order_no}</td>
-                    <td data-label="Customer">{row.customer_name}</td>
+                    <td data-label="Customer"><CustomerLink id={row.customer_id} name={row.customer_name} /></td>
                     <td data-label="Project">{row.contract_description}</td>
                     <td data-label="Status">{STATUS_LABELS[row.status] || row.status}</td>
                     <td><Link className="btn btn-sm btn-primary" to={`/warranty-certificates/${row.id}`}>View</Link></td>

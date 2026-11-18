@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import { useAuth } from '../context/useAuth';
 import DataTable from '../components/DataTable';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { SupplierLink } from '../components/PartyLink';
+import { displayDate, displayAuditTime } from '../utils/dates';
 
 const STATUS_LABELS = {
   pending_request: 'Pending Request',
@@ -24,7 +26,7 @@ function qty(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 }
-function formatDate(v) { return v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'; }
+function formatDate(v) { return v ? displayDate(v) : '—'; }
 
 // Mirrors the real "Purchase Requisition" detail view. PR Qty/PO Qty/Status per line
 // track how much of this request a Purchase Order has picked up -- via the Place Order
@@ -80,8 +82,8 @@ export default function PurchaseRequisitionView() {
       <div className="page-header">
         <div />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-sm" onClick={() => navigate('/purchase-requisitions')}>Back</button>
-          {canEdit && isPending && <button className="btn btn-sm btn-primary" onClick={() => navigate(`/purchase-requisitions/${id}/edit`)}>Edit</button>}
+          <Link className="btn btn-sm" to={'/purchase-requisitions'}>Back</Link>
+          {canEdit && pr.status !== 'cancelled' && <Link className="btn btn-sm btn-primary" to={`/purchase-requisitions/${id}/edit`}>Edit</Link>}
           {canEdit && isPending && <button className="btn btn-sm btn-warning" disabled={busy} onClick={handleCancel}>Cancel</button>}
         </div>
       </div>
@@ -136,13 +138,13 @@ export default function PurchaseRequisitionView() {
                   <tr key={l.id}>
                     <td>
                       <span style={{ color: '#db2777', fontWeight: 600, marginRight: 8 }}>{idx + 1}</span>
-                      <button type="button" className="link-btn" onClick={() => navigate(`/inventory/${l.item_id}`)}>
+                      <Link className="link-btn" to={`/inventory/${l.item_id}`}>
                         {l.item_code} {l.item_name ? `— ${l.item_name}` : ''}
-                      </button>
+                      </Link>
                     </td>
                     <td>{l.purchase_description}</td>
                     <td>{l.job_order_id ? (
-                      <button type="button" className="link-btn" onClick={() => navigate(`/production/${l.job_order_id}`)}>{l.job_order_no}</button>
+                      <Link className="link-btn" to={`/production/${l.job_order_id}`}>{l.job_order_no}</Link>
                     ) : '—'}</td>
                     <td>{qty(l.qty_on_hand)}</td>
                     <td>{qty(l.qty)}</td>
@@ -169,9 +171,9 @@ export default function PurchaseRequisitionView() {
                 {purchaseOrders.map((po) => (
                   <tr key={po.id}>
                     <td>Purchase Order</td>
-                    <td><button type="button" className="link-btn" onClick={() => navigate(`/purchase-orders/${po.id}`)}>{po.po_no}</button></td>
+                    <td><Link className="link-btn" to={`/purchase-orders/${po.id}`}>{po.po_no}</Link></td>
                     <td>{formatDate(po.date_created)}</td>
-                    <td>{po.supplier_name}</td>
+                    <td><SupplierLink id={po.supplier_id} name={po.supplier_name} /></td>
                     <td>{PO_STATUS_LABELS[po.status] || po.status}</td>
                   </tr>
                 ))}
@@ -185,7 +187,7 @@ export default function PurchaseRequisitionView() {
         <div className="card">
           <DataTable
             columns={[
-              { key: 'set_at', label: 'Date Time', render: (r) => new Date(r.set_at).toLocaleString() },
+              { key: 'set_at', label: 'Date Time', render: (r) => displayAuditTime(r.set_at) },
               { key: 'set_by_name', label: 'Set By' },
               { key: 'event_type', label: 'Type' },
               { key: 'field_name', label: 'Field' },

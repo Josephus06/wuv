@@ -1,7 +1,9 @@
+import { rate6 } from '../utils/rate';
 import { useEffect, useMemo, useState } from 'react';
 import api from '../api/client';
 import EntityPicker from './EntityPicker';
 import LoadingSpinner from './LoadingSpinner';
+import { lineDepartmentError } from '../utils/requireDepartment';
 
 function qty(v) {
   const n = Number(v);
@@ -28,12 +30,25 @@ function computeLine(l, wtaxRate) {
   const unitPrice = Number(l.unit_price) || 0;
   const discPercent = Number(l.disc_percent) || 0;
   const taxRate = Number(l.tax_rate) || 0;
-  const subtotal = q * unitPrice;
-  const discAmount = subtotal * (discPercent / 100);
-  const netOfTax = subtotal - discAmount;
-  const taxAmount = netOfTax * (taxRate / 100);
+  // A typed Amount (net of VAT) stands as typed; otherwise it is qty x unit price less discount.
+  const typed = l.amount !== undefined && l.amount !== '' && Number.isFinite(Number(l.amount));
+  // Billed at the PO line's own unit price and discount: the PO line's figures, in proportion to
+  // the qty billed -- what the server saves (vendorBills.js computeLineFromPoLine), so the bill
+  // cannot come out a centavo off the PO it was billed from.
+  const same = (a, b) => Math.abs(Number(a || 0) - Number(b || 0)) < 0.000001;
+  const share = Number(l.po_qty) > 0 && l.po_net_of_tax != null && same(unitPrice, l.rate) && same(discPercent, l.po_disc_percent)
+    ? q / Number(l.po_qty) : null;
+  const r2 = (v) => Number((Number(v || 0) * share).toFixed(2));
+  const netOfTax = typed ? Number(l.amount) : (share != null ? r2(l.po_net_of_tax) : q * unitPrice * (1 - discPercent / 100));
+  const discAmount = typed ? (discPercent > 0 && discPercent < 100 ? netOfTax / (1 - discPercent / 100) - netOfTax : 0)
+    : (share != null ? r2(l.po_disc_amount) : q * unitPrice * (discPercent / 100));
+  // A typed Tax Amount (tax_typed) stands; otherwise Net x the line's tax rate.
+  const taxTyped = l.tax_typed !== undefined && l.tax_typed !== '' && Number.isFinite(Number(l.tax_typed));
+  const taxAmount = taxTyped ? Number(l.tax_typed) : (share != null && !typed ? r2(l.po_tax_amount) : netOfTax * (taxRate / 100));
   const extPrice = netOfTax + taxAmount;
-  const wtaxAmount = l.is_withhold ? netOfTax * (Number(wtaxRate || 0) / 100) : 0;
+  // A typed withholding (wtax_typed) stands; otherwise Net x the bill's rate.
+  const wtTyped = l.wtax_typed !== undefined && l.wtax_typed !== '' && Number.isFinite(Number(l.wtax_typed));
+  const wtaxAmount = l.is_withhold ? (wtTyped ? Number(l.wtax_typed) : netOfTax * (Number(wtaxRate || 0) / 100)) : 0;
   return { disc_amount: discAmount, net_of_tax: netOfTax, tax_amount: taxAmount, ext_price: extPrice, wtax_amount: wtaxAmount, amount_due: extPrice - wtaxAmount };
 }
 
@@ -48,6 +63,9 @@ export default function VendorBillModal({ purchaseOrderId, onClose, onSaved }) {
   const [referenceNo, setReferenceNo] = useState('');
   const [account, setAccount] = useState(null);
   const [officeLocation, setOfficeLocation] = useState(null);
+  // Term defaults to the PO's and can be changed to any Payment Term; Date Due follows its days.
+  const [paymentTerms, setPaymentTerms] = useState([]);
+  const [term, setTerm] = useState({ name: '', days: 0 });
   const [memo, setMemo] = useState('');
   const [lines, setLines] = useState([]);
   const [tab, setTab] = useState('items');
@@ -58,6 +76,8 @@ export default function VendorBillModal({ purchaseOrderId, onClose, onSaved }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // For bill lines whose PO line carries no department: one must be chosen here (required on save).
+  const [departments, setDepartments] = useState([]);
 
   useEffect(() => {
     Promise.all([
@@ -65,7 +85,10 @@ export default function VendorBillModal({ purchaseOrderId, onClose, onSaved }) {
       api.get('/lookups/chart-of-accounts'),
       api.get('/lookups/locations'),
       api.get('/lookups/withholding-taxes'),
-    ]).then(([poRes, acctRes, locRes, wtaxRes]) => {
+      api.get('/lookups/payment-terms').catch(() => ({ data: [] })),
+    ]).then(([poRes, acctRes, locRes, wtaxRes, ptRes]) => {
+      setPaymentTerms((ptRes.data || []).filter((t) => t.is_active !== 0 && t.is_active !== false));
+      setDepartments(poRes.data.departments || []);
       const d = poRes.data;
       setData(d);
       setAccounts(acctRes.data);
@@ -73,13 +96,18 @@ export default function VendorBillModal({ purchaseOrderId, onClose, onSaved }) {
       setWithholdingTaxes(wtaxRes.data);
       setMemo(d.memo || '');
       if (d.default_account) setAccount(d.default_account);
-      setLines(d.lines.map((l) => ({ ...l, is_withhold: false })));
+      // The PO's own term and the location its lines use (asked 2026-10-03).
+      setTerm({ name: d.term_name || '', days: Number(d.no_of_days) || 0 });
+      if (d.default_office_location) setOfficeLocation(d.default_office_location);
+      // po_disc_percent: the PO line's own discount, kept aside so a line billed on the PO's terms
+      // can be told from one whose discount was changed here (computeLine).
+      setLines(d.lines.map((l) => ({ ...l, po_disc_percent: l.disc_percent, is_withhold: false })));
       setLoading(false);
     });
   }, [purchaseOrderId]);
 
   const wtaxRate = wtax ? Number(wtax.rate) : 0;
-  const dateDue = data ? addDays(dateCreated, data.no_of_days) : '';
+  const dateDue = data ? addDays(dateCreated, term.days) : '';
 
   const computedLines = useMemo(() => lines.map((l) => ({ ...l, ...computeLine(l, wtaxRate) })), [lines, wtaxRate]);
 
@@ -91,7 +119,7 @@ export default function VendorBillModal({ purchaseOrderId, onClose, onSaved }) {
     );
   }
 
-  const subtotal = computedLines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unit_price) || 0), 0);
+  const subtotal = computedLines.reduce((s, l) => s + l.net_of_tax + l.disc_amount, 0);
   const discountAmount = computedLines.reduce((s, l) => s + l.disc_amount, 0);
   const netOfTax = computedLines.reduce((s, l) => s + l.net_of_tax, 0);
   const taxAmount = computedLines.reduce((s, l) => s + l.tax_amount, 0);
@@ -99,20 +127,42 @@ export default function VendorBillModal({ purchaseOrderId, onClose, onSaved }) {
   const wtaxAmount = computedLines.reduce((s, l) => s + l.wtax_amount, 0);
   const amountDue = grossAmount - wtaxAmount;
 
+  // Editing Qty, Unit Price or Discount drops a typed Amount (it is recomputed from them again);
+  // typing an Amount sets Unit Price = Amount / Qty (before discount), shown to 4 decimals.
   function updateLine(purchaseOrderLineId, patch) {
-    setLines((prev) => prev.map((l) => (l.purchase_order_line_id === purchaseOrderLineId ? { ...l, ...patch } : l)));
+    setLines((prev) => prev.map((l) => {
+      if (l.purchase_order_line_id !== purchaseOrderLineId) return l;
+      const next = { ...l, ...patch };
+      if ('qty' in patch || 'unit_price' in patch || 'disc_percent' in patch) {
+        if (!('amount' in patch)) delete next.amount;
+      }
+      // A new amount puts the withholding back on Net x rate.
+      if (('amount' in patch || 'qty' in patch || 'unit_price' in patch || 'disc_percent' in patch) && !('wtax_typed' in patch)) delete next.wtax_typed;
+      // ...and the tax back on Net x rate.
+      if (('amount' in patch || 'qty' in patch || 'unit_price' in patch || 'disc_percent' in patch) && !('tax_typed' in patch)) delete next.tax_typed;
+      if ('amount' in patch) {
+        const q = Number(next.qty) || 0;
+        const d = Number(next.disc_percent) || 0;
+        const sub = d > 0 && d < 100 ? Number(patch.amount || 0) / (1 - d / 100) : Number(patch.amount || 0);
+        if (q > 0) next.unit_price = Number((sub / q).toFixed(6));
+      }
+      return next;
+    }));
   }
 
   async function handleSave() {
     setError('');
     if (!lines.length) { setError('Nothing to bill.'); return; }
+    // Only the lines being billed (Qty above 0), as the server counts them.
+    const deptError = lineDepartmentError(lines.filter((l) => Number(l.qty) > 0));
+    if (deptError) { setError(deptError); return; }
     setSaving(true);
     try {
       const { data: vb } = await api.post('/vendor-bills', {
         purchase_order_id: purchaseOrderId,
         date_created: dateCreated,
         date_due: dateDue,
-        term: data.term_name,
+        term: term.name || null,
         reference_no: referenceNo,
         account_id: account?.id || null,
         office_location_id: officeLocation?.id || null,
@@ -122,8 +172,15 @@ export default function VendorBillModal({ purchaseOrderId, onClose, onSaved }) {
           purchase_order_line_id: l.purchase_order_line_id,
           qty: l.qty,
           unit_price: l.unit_price,
+          // Sent only when typed; the server then keeps it exactly and derives Unit Price.
+          amount: l.amount !== undefined && l.amount !== '' ? Number(l.amount) : undefined,
           disc_percent: l.disc_percent,
+          // Sent only when typed; the server then keeps it (withTypedTax).
+          tax_amount: l.tax_typed !== undefined && l.tax_typed !== '' ? Number(l.tax_typed) : undefined,
           is_withhold: l.is_withhold,
+          // Sent only when typed; the server then keeps it (lineWtax).
+          wtax_amount: l.is_withhold && l.wtax_typed !== undefined && l.wtax_typed !== '' ? Number(l.wtax_typed) : undefined,
+          department_id: l.department_id || null,
         })),
       });
       onSaved(vb);
@@ -174,7 +231,18 @@ export default function VendorBillModal({ purchaseOrderId, onClose, onSaved }) {
                   onSelect={setOfficeLocation}
                 />
               </div>
-              <div className="field"><label>Term</label><input readOnly tabIndex={-1} value={data.term_name || ''} /></div>
+              <div className="field">
+                <label>Term</label>
+                <EntityPicker
+                  label="Term" items={paymentTerms}
+                  value={paymentTerms.find((t) => String(t.term_name).trim().toLowerCase() === String(term.name).trim().toLowerCase())?.id || ''}
+                  getLabel={(t) => t.term_name}
+                  columns={[{ key: 'term_name', label: 'Term' }, { key: 'no_of_days', label: 'Days', render: (t) => Number(t.no_of_days || 0) }]}
+                  searchKeys={['term_name']} placeholder={term.name || 'Select Term...'}
+                  onSelect={(t) => setTerm(t ? { name: t.term_name, days: Number(t.no_of_days) || 0 } : { name: '', days: 0 })}
+                  onClear={() => setTerm({ name: '', days: 0 })}
+                />
+              </div>
               <div className="field"><label>Memo</label><textarea rows={3} value={memo} onChange={(e) => setMemo(e.target.value)} /></div>
             </div>
             <div className="card" style={{ background: 'var(--surface-2, #f3f4f6)' }}>
@@ -199,7 +267,7 @@ export default function VendorBillModal({ purchaseOrderId, onClose, onSaved }) {
               <table>
                 <thead>
                   <tr>
-                    <th>Item Code</th><th>Purchase Desc.</th><th>Location</th><th>Department</th>
+                    <th>Item Code</th><th>Purchase Desc.</th><th>Location</th><th>Department *</th>
                     <th>RR Qty</th><th>Billed Qty</th><th>Qty to Bill</th><th>Purchase Unit</th>
                     <th>Rate</th><th>Unit Price</th><th>Discount %</th><th>Total Disc. Amt.</th>
                     <th>Total Amt. (Net of Tax)</th><th>Tax Code</th><th>Tax Amt.</th><th>Ext. Price</th>
@@ -215,18 +283,26 @@ export default function VendorBillModal({ purchaseOrderId, onClose, onSaved }) {
                       <td>{l.item_code} {l.item_name ? `— ${l.item_name}` : ''}</td>
                       <td>{l.purchase_description}</td>
                       <td>{l.location_name}</td>
-                      <td>{l.department_name}</td>
+                      <td>
+                        {l.department_name || (
+                          <select value={l.department_id || ''} onChange={(e) => updateLine(l.purchase_order_line_id, { department_id: e.target.value })}
+                            style={!l.department_id ? { borderColor: 'var(--danger, #b91c1c)' } : undefined} title="Required: this PO line has no department">
+                            <option value="">--Required--</option>
+                            {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                          </select>
+                        )}
+                      </td>
                       <td>{qty(l.rr_qty)}</td>
                       <td>{qty(l.billed_qty)}</td>
                       <td>
                         <input
-                          type="number" step="0.0001" style={{ width: 90 }}
+                          type="number" step="0.000001" style={{ width: 90 }}
                           value={l.qty}
                           onChange={(e) => updateLine(l.purchase_order_line_id, { qty: e.target.value })}
                         />
                       </td>
-                      <td>{l.unit_title}</td>
-                      <td>{money(l.rate)}</td>
+                      <td>{l.purchase_unit || l.unit_title}</td>
+                      <td>{rate6(l.rate)}</td>
                       <td>
                         <input
                           type="number" step="0.00001" style={{ width: 100 }}
@@ -242,9 +318,20 @@ export default function VendorBillModal({ purchaseOrderId, onClose, onSaved }) {
                         />
                       </td>
                       <td>{money(l.disc_amount)}</td>
-                      <td>{money(l.net_of_tax)}</td>
+                      <td>
+                        <input
+                          type="number" step="0.01" style={{ width: 110 }}
+                          value={l.amount !== undefined ? l.amount : Number(l.net_of_tax.toFixed(2))}
+                          onChange={(e) => updateLine(l.purchase_order_line_id, { amount: e.target.value })}
+                          title="Type the Amount (net of VAT); Unit Price follows"
+                        />
+                      </td>
                       <td>{l.tax_code}</td>
-                      <td>{money(l.tax_amount)}</td>
+                      <td>
+                        <input type="number" step="0.01" style={{ width: 90 }} title="Tax for this line -- Net x the tax rate unless typed"
+                          value={l.tax_typed !== undefined ? l.tax_typed : Number(l.tax_amount.toFixed(2))}
+                          onChange={(e) => updateLine(l.purchase_order_line_id, { tax_typed: e.target.value })} />
+                      </td>
                       <td>{money(l.ext_price)}</td>
                       <td>
                         <input
@@ -252,7 +339,13 @@ export default function VendorBillModal({ purchaseOrderId, onClose, onSaved }) {
                           onChange={(e) => updateLine(l.purchase_order_line_id, { is_withhold: e.target.checked })}
                         />
                       </td>
-                      <td>{money(l.wtax_amount)}</td>
+                      <td>
+                        {l.is_withhold ? (
+                          <input type="number" step="0.01" min="0" style={{ width: 90 }} title="Withholding for this line -- Net x rate unless typed"
+                            value={l.wtax_typed !== undefined ? l.wtax_typed : Number(l.wtax_amount.toFixed(2))}
+                            onChange={(e) => updateLine(l.purchase_order_line_id, { wtax_typed: e.target.value })} />
+                        ) : money(l.wtax_amount)}
+                      </td>
                       <td>{money(l.amount_due)}</td>
                     </tr>
                   ))}

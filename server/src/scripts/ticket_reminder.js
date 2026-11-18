@@ -32,7 +32,9 @@ async function sendTicketReminders() {
      LEFT JOIN users u ON u.id = t.created_by_user_id
      LEFT JOIN users hu ON hu.id = d.head_user_id
      WHERE DATE(t.created_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
-       AND t.status NOT IN ('resolved', 'closed')
+       -- 'declined' belongs here too: the approver has answered, so nagging the department
+       -- about it would be chasing a decision that has already been taken.
+       AND t.status NOT IN ('resolved', 'closed', 'declined')
      ORDER BY d.id, t.created_at`);
 
   if (!rows.length) {

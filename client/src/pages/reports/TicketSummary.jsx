@@ -1,13 +1,17 @@
 import { useState } from 'react';
 import api from '../../api/client';
 import LoadingSpinner from '../../components/LoadingSpinner';
+import { parseUtc } from '../../utils/datetime';
 
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
 function formatDate(v) {
-  return v ? new Date(v).toLocaleString('en-US', {
+  // Ticket timestamps are written by this app with MySQL NOW(), and the database runs on UTC,
+  // so they arrive as UTC wall-clock with no marker -- parseUtc, not new Date, or every time
+  // reads 8 hours behind in Cebu. See utils/datetime.js.
+  return v ? parseUtc(v).toLocaleString('en-US', {
     month: 'short', day: '2-digit', year: 'numeric',
     hour: 'numeric', minute: '2-digit',
   }) : '—';
