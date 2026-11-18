@@ -3584,3 +3584,10 @@ tr.clickable:hover td { background: var(--accent-bg); }
 /* The calendars drawn as an inline grid over a border-coloured background (CRM, Design Schedule,
    Installation Planner): the week cell takes the day cells' surface. */
 .cal-inline-weeks > .cal-wk { background: var(--surface); }
+
+/* The topbar shows the company's full name; the short one only on a phone (Layout.jsx brand). */
+.topnav-brand-short { display: none; }
+@media (max-width: 860px) {
+  .topnav-brand-full { display: none; }
+  .topnav-brand-short { display: inline; }
+}
