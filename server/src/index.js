@@ -97,6 +97,8 @@ const birTaxReturnRoutes = require('./routes/birTaxReturn');
 const collectionForecastRoutes = require('./routes/collectionForecast');
 const collectionAgingReportRoutes = require('./routes/collectionAgingReport');
 const collectionIncentiveRoutes = require('./routes/collectionIncentive');
+// POS shift sales -> Sales Invoices (Category Sales report, paid from the Z-Reading).
+const posSalesImportRoutes = require('./routes/posSalesImport');
 const { ensureAssignedAtColumn } = require('./db/ensureSchema');
 const { ensureDatabaseReady } = require('./db/autoBootstrap');
 const { sendTicketReminders } = require('./scripts/ticket_reminder');
@@ -211,6 +213,7 @@ app.use('/api/reports/bir-tax-return', birTaxReturnRoutes);
 app.use('/api/collection-forecast', collectionForecastRoutes);
 app.use('/api/reports/collection-aging', collectionAgingReportRoutes);
 app.use('/api/treasury/collection-incentive', collectionIncentiveRoutes);
+app.use('/api/pos-sales-import', posSalesImportRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

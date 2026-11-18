@@ -109,6 +109,7 @@ const STEPS = [
   ['sync-gsuite-existing-modules.js', 'GSUITE sync: schema, permission flags and pages for the updated modules'],
   ['add-company-branch-tagging.js', 'branch on Bank Deposits and Fund Transfers, for company reporting'],
   ['sync-gsuite-accounting-reports.js', 'Accounting reports, BIR Reports and Treasury: tables and pages'],
+  ['add-pos-sales-invoices.js', 'POS shift sales as Sales Invoices: import key, line cost, POS category item defaults'],
 
   // Last: registers any page the migrations above did not, and gives the seeded admin an
   // account_type plus full access to everything.

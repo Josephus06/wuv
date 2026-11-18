@@ -205,6 +205,15 @@ router.post('/import/preview', requireAuth, requirePermission(ROUTE, 'can_add'),
           [parsed.import_key]
         );
         duplicate = row || null;
+        // Already invoiced from its Category Sales report (Sales Invoices > Import POS Sales,
+        // lib/posSalesImport.js): that invoice is the shift's sales, so a Sales Order would book
+        // them twice. Refused outright rather than flagged.
+        const [[inv]] = await pool.query('SELECT invoice_no FROM sales_invoices WHERE pos_import_key = ?',
+          [String(parsed.import_key).replace(/^Z:/, '')]).catch(() => [[null]]);
+        if (inv) {
+          parsed.ok = false;
+          parsed.errors = [...(parsed.errors || []), `This shift is already recorded as invoice ${inv.invoice_no} (Import POS Sales) -- importing it here would book its sales twice.`];
+        }
       }
 
       // A consolidated reading and a per-shift reading of the same till on the same day are
@@ -301,6 +310,11 @@ router.post('/import', requireAuth, requirePermission(ROUTE, 'can_add'), async (
     for (const s of shifts) {
       const label = `${s.branch_code || '?'}/${s.shift || '?'} ${s.sale_date || ''}`.trim();
       if (!s.sale_date) return res.status(400).json({ error: `A shift (${s.source_file || label}) has no date.` });
+      // Re-checked at save: a shift invoiced through Import POS Sales must not become a Sales Order too.
+      if (s.import_key) {
+        const [[inv]] = await conn.query('SELECT invoice_no FROM sales_invoices WHERE pos_import_key = ?', [String(s.import_key).replace(/^Z:/, '')]);
+        if (inv) return res.status(409).json({ error: `Shift ${label} is already recorded as invoice ${inv.invoice_no} (Import POS Sales).` });
+      }
 
       const r = {
         sale_date: s.sale_date,

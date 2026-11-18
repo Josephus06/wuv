@@ -186,6 +186,7 @@ import ProcessCostingEdit from './pages/ProcessCostingEdit';
 import ProcessCostingView from './pages/ProcessCostingView';
 import MaterialCostEdit from './pages/MaterialCostEdit';
 import ReceivingReports from './pages/ReceivingReports';
+import PosSalesImport from './pages/PosSalesImport';
 // Accounting reports, BIR Reports and Treasury from GSUITE (2026-11-18).
 import BankReconciliations from './pages/accounting/BankReconciliations';
 import BankReconciliationView from './pages/accounting/BankReconciliationView';
@@ -358,6 +359,7 @@ function App() {
         <Route path="/item-deliveries" element={<ItemDeliveries />} />
         <Route path="/item-deliveries/:id" element={<ItemDeliveryView />} />
         <Route path="/sales-invoices" element={<SalesInvoices />} />
+        <Route path="/sales-invoices/import-pos" element={<PosSalesImport />} />
         <Route path="/sales-invoices/:id" element={<SalesInvoiceView />} />
         <Route path="/delivery-tickets" element={<DeliveryTickets />} />
         <Route path="/delivery-tickets/:id" element={<DeliveryTicketView />} />

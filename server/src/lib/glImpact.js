@@ -163,6 +163,32 @@ async function computeSalesInvoiceGl(si, lines) {
     if (!acct) acct = await coaByCode('21100');
     if (acct) rows.push({ account_code: acct.account_code, account_name: acct.account_name, debit: 0, credit: Number(amt.toFixed(2)) });
   }
+
+  // Cost of what was sold off the shelf (POS shift invoices, lib/posSalesImport.js): a line that
+  // carries a cost_amount -- the item's average cost frozen when it was sold -- posts
+  // Dr the item's cost-of-sales account / Cr its inventory account. A line whose item has either
+  // account missing posts no cost rather than half an entry.
+  const costLines = lines.filter((l) => l.item_id && Number(l.cost_amount) > 0);
+  if (costLines.length) {
+    const ids = [...new Set(costLines.map((l) => Number(l.item_id)))];
+    const [accts] = await pool.query('SELECT id, cogs_account_id, asset_account_id FROM inventories WHERE id IN (?)', [ids]);
+    const byItem = new Map(accts.map((a) => [Number(a.id), a]));
+    const dr = new Map(); const cr = new Map();
+    for (const l of costLines) {
+      const a = byItem.get(Number(l.item_id));
+      if (!a || !a.cogs_account_id || !a.asset_account_id) continue;
+      const amt = Number(l.cost_amount);
+      dr.set(a.cogs_account_id, (dr.get(a.cogs_account_id) || 0) + amt);
+      cr.set(a.asset_account_id, (cr.get(a.asset_account_id) || 0) + amt);
+    }
+    for (const [map, side] of [[dr, 'debit'], [cr, 'credit']]) {
+      for (const [id, amt] of map) {
+        const acct = await coaById(id);
+        const v = Number(amt.toFixed(2));
+        if (acct && v) rows.push({ account_code: acct.account_code, account_name: acct.account_name, debit: side === 'debit' ? v : 0, credit: side === 'credit' ? v : 0 });
+      }
+    }
+  }
   return rows;
 }
 

@@ -175,6 +175,10 @@ export default function SalesInvoices() {
           {mayCreate && (
             <button className="btn btn-primary" onClick={() => setShowCreate(true)}>Create New</button>
           )}
+          {mayCreate && (
+            // One invoice per POS shift, from its Category Sales report and Z-Reading (PosSalesImport.jsx).
+            <Link className="btn" to="/sales-invoices/import-pos">Import POS Sales</Link>
+          )}
         </div>
       </div>
 

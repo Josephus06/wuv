@@ -269,13 +269,30 @@ function movementsSql(filterByItem = false) {
   LEFT JOIN locations rtloc ON rtloc.id = rmi2.return_to_location_id
   LEFT JOIN inventories i8 ON i8.id = rrl2.item_id
   LEFT JOIN units_of_measure bu8 ON bu8.id = i8.base_unit_id${where('rrl2')}
+
+  UNION ALL
+
+  -- POS shift sales (Sales Invoices > Import POS Sales, lib/posSalesImport.js): what the shift sold or
+  -- used up leaves the branch's stock on the shift's date, at the cost frozen on the line. Only those
+  -- invoices -- a standalone invoice keyed by hand moves nothing, as before -- and not once voided.
+  SELECT si9.date_created, si9.invoice_no, 'POS Sales',
+         si9.pos_import_key, sil9.item_id, si9.office_location_id, sloc9.location_name, NULL, NULL,
+         0, sil9.quantity, sil9.unit_cost, si9.id, si9.created_at, bu9.code, bu9.code, NULL
+  FROM sales_invoice_lines sil9
+  JOIN sales_invoices si9 ON si9.id = sil9.sales_invoice_id
+  LEFT JOIN locations sloc9 ON sloc9.id = si9.office_location_id
+  LEFT JOIN inventories i9 ON i9.id = sil9.item_id
+  LEFT JOIN units_of_measure bu9 ON bu9.id = i9.base_unit_id
+  WHERE si9.pos_import_key IS NOT NULL AND si9.status <> 'cancelled' AND si9.office_location_id IS NOT NULL
+    AND sil9.item_id IS NOT NULL
+    AND (i9.item_type IS NULL OR LOWER(i9.item_type) NOT IN ('service', 'non-inventory', 'noninventory', 'landed cost', 'landedcost', 'discount'))${and('sil9')}
 `;
 }
 
 // How many item-id placeholders movementsSql(true) carries -- one per movement branch. Callers
 // pass movementParams(ids) rather than counting branches themselves, so adding a branch here
 // cannot leave a caller one parameter short.
-const MOVEMENT_FILTER_COUNT = 10;
+const MOVEMENT_FILTER_COUNT = 11;
 function movementParams(ids) {
   return Array.from({ length: MOVEMENT_FILTER_COUNT }, () => ids);
 }
