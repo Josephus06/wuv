@@ -26,16 +26,13 @@ export default function PosSalesImport() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    Promise.all([
-      api.get('/customers', { params: { limit: 1000 } }),
-      api.get('/lookups/company-branches'),
-      api.get('/lookups/departments'),
-    ]).then(([c, cb, d]) => {
-      setCustomers(c.data.rows || c.data);
-      const coName = new Map((cb.data.companies || []).map((x) => [String(x.id), x.name]));
-      setLocations((cb.data.branches || []).map((b) => ({ ...b, company_name: coName.get(String(b.company_id)) || '' })));
-      setDepartments((d.data || []).filter((x) => x.is_active));
-    }).catch(() => {});
+    // One call under this page's own permission (server routes/posSalesImport.js /options), so a
+    // cashier without Customers / Lookups rights still gets every picker filled.
+    api.get('/pos-sales-import/options').then(({ data }) => {
+      setCustomers(data.customers || []);
+      setLocations((data.branches || []).map((b) => ({ ...b, company_name: b.company_name || '' })));
+      setDepartments(data.departments || []);
+    }).catch((e) => setError(e.response?.data?.error || 'Could not load the branches, customers and departments'));
   }, []);
 
   const form = (extra = {}) => {

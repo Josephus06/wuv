@@ -13,6 +13,7 @@ const { assertPeriodOpen } = require('../lib/accountingPeriod');
 const { extractPdfText } = require('../lib/posCategorySales');
 const { readReport, buildShifts, importShift } = require('../lib/posSalesImport');
 const { parseDailySummary } = require('../lib/posDailySummary');
+const { currentScope } = require('../lib/requestScope');
 
 const router = express.Router();
 const ROUTE = '/sales-invoices';
@@ -49,6 +50,24 @@ async function readFiles(files) {
   }
   return reports;
 }
+
+// The pickers' lists -- branches, customers, departments -- under this page's own permission. Read
+// from /customers and /lookups they needed Customers and Lookups rights too, and a cashier without
+// them saw three empty pickers (2026-11-19). Branches follow the topbar company switcher.
+router.get('/options', requireAuth, requirePermission(ROUTE, 'can_add'), async (req, res, next) => {
+  try {
+    const scope = currentScope();
+    const ids = scope ? [...scope.locationIds].map(Number).filter((n) => n > 0) : null;
+    const [branches] = await pool.query(
+      `SELECT l.id, l.location_name, l.company_id, c.name AS company_name FROM locations l
+         LEFT JOIN companies c ON c.id = l.company_id
+        WHERE l.is_active = TRUE ${ids ? `AND l.id IN (${ids.length ? ids.join(',') : 'NULL'})` : ''}
+        ORDER BY c.name, l.location_name`);
+    const [customers] = await pool.query('SELECT id, name, customer_code FROM customers WHERE is_active = TRUE ORDER BY name');
+    const [departments] = await pool.query('SELECT id, name FROM departments WHERE is_active = TRUE ORDER BY name');
+    res.json({ branches, customers, departments });
+  } catch (err) { next(err); }
+});
 
 router.post('/preview', requireAuth, requirePermission(ROUTE, 'can_add'), upload.array('files', 124), async (req, res, next) => {
   try {
