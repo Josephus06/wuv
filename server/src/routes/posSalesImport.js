@@ -12,6 +12,7 @@ const { requireAuth, requirePermission } = require('../middleware/auth');
 const { assertPeriodOpen } = require('../lib/accountingPeriod');
 const { extractPdfText } = require('../lib/posCategorySales');
 const { readReport, buildShifts, importShift } = require('../lib/posSalesImport');
+const { parseDailySummary } = require('../lib/posDailySummary');
 
 const router = express.Router();
 const ROUTE = '/sales-invoices';
@@ -20,14 +21,24 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024, files: 124 },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'application/pdf' || /\.pdf$/i.test(file.originalname)) return cb(null, true);
-    cb(new Error('Only PDF files can be imported.'));
+    // POS reports as PDF; the salons' daily sales sheet as an Excel workbook.
+    if (file.mimetype === 'application/pdf' || /\.(pdf|xlsx)$/i.test(file.originalname)) return cb(null, true);
+    cb(new Error('Only PDF reports and .xlsx daily sales sheets can be imported.'));
   },
 });
 
 async function readFiles(files) {
   const reports = [];
   for (const file of files) {
+    // A daily sales sheet (lib/posDailySummary.js): every dated row is a day of its own.
+    if (/\.xlsx$/i.test(file.originalname)) {
+      let days;
+      try { days = parseDailySummary(file.buffer, file.originalname); } catch (e) { days = [{ ok: false, errors: [`Could not read the workbook: ${e.message}`] }]; }
+      for (const d of days) {
+        reports.push({ source_file: `${file.originalname}${d.closed_date ? ` (${d.closed_date})` : ''}`, kind: d.ok ? 'daily' : 'unknown', parsed: d });
+      }
+      continue;
+    }
     let text = '';
     try { text = await extractPdfText(file.buffer); } catch { text = ''; }
     if (text.replace(/\s/g, '').length < 100) {

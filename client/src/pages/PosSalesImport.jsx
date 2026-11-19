@@ -88,6 +88,11 @@ export default function PosSalesImport() {
           Each shift becomes one invoice: the Category Sales lines are the items sold (new POS items are added to Master Lists),
           the products leave the branch&apos;s stock, and the Z-Reading&apos;s cash and GCash pay the invoice.
         </p>
+        <p className="muted">
+          For the salons (Cuts For Tots), pick the month&apos;s <strong>Daily Sales Reports</strong> workbook (.xlsx) instead: each day on its
+          SALES SUMMARY sheet becomes one invoice, paid by that day&apos;s GCash, cash and gift certificates used, with any cash short
+          or over booked to Cash Short and Over. Days already imported are skipped, so the same workbook can be uploaded again as the month fills in.
+        </p>
         <div className="filter-grid">
           <div className="field">
             <label>Branch *</label>
@@ -107,8 +112,8 @@ export default function PosSalesImport() {
               columns={[{ key: 'name', label: 'Name' }]} searchKeys={['name']} onSelect={setDepartment} />
           </div>
           <div className="field">
-            <label>POS reports (PDF)</label>
-            <input type="file" accept="application/pdf,.pdf" multiple onChange={(e) => readFiles([...(e.target.files || [])])} />
+            <label>POS reports (PDF) or daily sales sheet (.xlsx)</label>
+            <input type="file" accept="application/pdf,.pdf,.xlsx" multiple onChange={(e) => readFiles([...(e.target.files || [])])} />
           </div>
         </div>
       </div>
@@ -189,7 +194,7 @@ export default function PosSalesImport() {
           <strong>Imported</strong>
           <div className="table-wrap" style={{ marginTop: 8 }}>
             <table>
-              <thead><tr><th>Shift</th><th>Invoice</th><th style={{ textAlign: 'right' }}>Total</th><th>Payments</th><th>Result</th></tr></thead>
+              <thead><tr><th>Shift</th><th>Invoice</th><th style={{ textAlign: 'right' }}>Total</th><th>Payments</th><th>Cash short / over</th><th>Result</th></tr></thead>
               <tbody>
                 {results.map((r) => (
                   <tr key={r.key}>
@@ -199,6 +204,7 @@ export default function PosSalesImport() {
                     <td>{(r.invoice?.payments || []).map((p) => (
                       <div key={p.id}><Link to={`/customer-payments/${p.id}`}>{p.customer_payment_no}</Link> {p.method} {money(p.amount)}</div>
                     ))}</td>
+                    <td>{r.invoice?.journal ? <Link to={`/journals/${r.invoice.journal.id}`}>{r.invoice.journal.journal_no} {money(r.invoice.journal.amount)}</Link> : ''}</td>
                     <td>{r.ok ? <span style={{ color: 'var(--success)' }}>Done</span> : <span style={{ color: 'var(--danger)' }}>{(r.errors || []).join(' ')}</span>}</td>
                   </tr>
                 ))}

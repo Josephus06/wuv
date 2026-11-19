@@ -35,6 +35,19 @@ const CATEGORY_DEFAULTS = [
   ['DETERGENT', 'Inventory', '30130', '15221', '30404'],
   ['FABCON', 'Inventory', '30130', '15221', '30404'],
   ['WATER REFILLING', 'Service', '30120', '15222', '30405'],
+  // Cuts For Tots, from the salons' daily sales sheet (lib/posDailySummary.js).
+  ['HAIR SERVICES', 'Service', '30140', null, null],
+  ['HAIR PRODUCT SALES', 'Service', '30130', null, null],
+  ['HAIR PRODUCTS', 'Inventory', '30130', '15231', '30406'],
+  // WFC (First Haircut Certificate) and ISC (Discount Card) are sold: hair salon sales.
+  ['CERTIFICATES', 'Service', '30140', null, null],
+  // Gift certificates: the customer's money, held in Customer Deposits until the certificate is used.
+  ['GIFT CERTIFICATES', 'Service', '23000', null, null],
+];
+
+// Accounts this needs that the company chart did not have: [code, name, created like this existing one].
+const NEW_ACCOUNTS = [
+  ['30705', 'Cash Short and Over', '30702'],
 ];
 
 async function hasColumn(table, column) {
@@ -80,6 +93,17 @@ async function accountId(code) {
       'ALTER TABLE pos_category_accounts ADD COLUMN asset_account_id BIGINT NULL');
     await step('pos_category_accounts.cogs_account_id', await hasColumn('pos_category_accounts', 'cogs_account_id'),
       'ALTER TABLE pos_category_accounts ADD COLUMN cogs_account_id BIGINT NULL');
+
+    // Cash Short and Over, for the daily sheet's over / short: under Other Expenses, set up like its sibling.
+    for (const [code, name, like] of NEW_ACCOUNTS) {
+      if (await accountId(code)) { console.log(`account ${code} ${name} -- already present, skipped`); continue; }
+      if (DRY_RUN) { console.log(`Would add account ${code} ${name}`); continue; }
+      const [r] = await pool.query(
+        `INSERT INTO chart_of_accounts (account_code, account_name, account_type, parent_account_id, is_active, coa_type_id, detail_type, is_summary)
+         SELECT ?, ?, account_type, parent_account_id, 1, coa_type_id, detail_type, 0 FROM chart_of_accounts WHERE account_code = ?`,
+        [code, name, like]);
+      console.log(r.affectedRows ? `account ${code} ${name} -- added` : `account ${code} -- not added: ${like} is not in this chart`);
+    }
 
     // Category defaults: only fills what is blank, so a mapping someone has already set is kept.
     if (!DRY_RUN) {
