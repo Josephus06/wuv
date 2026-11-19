@@ -1383,7 +1383,15 @@ async function computePostedGlLines({ toDate, fromDate }) {
   const push = (rows, meta) => {
     for (const r of rows) {
       if (!r.debit && !r.credit) continue;
-      out.push({ ...r, ...meta });
+      const o = { ...r, ...meta };
+      // An imported line (live_gl_entries) that names its own branch / department keeps them over the
+      // document's: an Odoo bill split between two branches stays split (db/import-odoo.js).
+      if (r._own) {
+        if (r._own.location_id) o.location_id = r._own.location_id;
+        if (r._own.department_id) o.department_id = r._own.department_id;
+        delete o._own;
+      }
+      out.push(o);
     }
   };
 
@@ -1394,7 +1402,7 @@ async function computePostedGlLines({ toDate, fromDate }) {
   const importedGl = new Map();
   try {
     const [rows] = await pool.query(
-      'SELECT source_type, source_id, account_code, account_name, debit, credit FROM live_gl_entries'
+      'SELECT source_type, source_id, account_code, account_name, debit, credit, location_id, department_id FROM live_gl_entries'
     );
     for (const r of rows) {
       const k = `${r.source_type}|${r.source_id}`;
@@ -1402,6 +1410,7 @@ async function computePostedGlLines({ toDate, fromDate }) {
       importedGl.get(k).push({
         account_code: r.account_code, account_name: r.account_name,
         debit: Number(r.debit) || 0, credit: Number(r.credit) || 0,
+        ...(r.location_id || r.department_id ? { _own: { location_id: r.location_id, department_id: r.department_id } } : {}),
       });
     }
   } catch (e) {
@@ -1441,7 +1450,7 @@ async function computePostedGlLines({ toDate, fromDate }) {
       headers.map((h) => h.id));
     for (const si of headers) {
       const lines = linesBy.get(si.id) || [];
-      const rows = await computeSalesInvoiceGl(si, lines);
+      const rows = glFor('sales_invoice', si.id, await computeSalesInvoiceGl(si, lines));
       push(rows, {
         entry_date: si.date_created, source_type: 'sales_invoice', source_no: si.invoice_no, source_id: si.id, memo: si.memo || null,
         location_id: si.office_location_id || null, department_id: si.department_id || null,
@@ -1592,7 +1601,7 @@ async function computePostedGlLines({ toDate, fromDate }) {
       headers.map((h) => h.id));
     for (const cp of headers) {
       const lines = linesBy.get(cp.id) || [];
-      const rows = await computeCustomerPaymentGl(cp, lines);
+      const rows = glFor('customer_payment', cp.id, await computeCustomerPaymentGl(cp, lines));
       push(rows, {
         entry_date: cp.date_created, source_type: 'customer_payment', source_no: cp.customer_payment_no, source_id: cp.id, memo: cp.memo || null,
         location_id: cp.office_location_id || null, department_id: cp.department_id || null,
