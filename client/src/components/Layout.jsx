@@ -205,7 +205,9 @@ const NAV_STRUCTURE = [
         ],
       },
       {
-        title: 'Reports',
+        // The reports this system had before the Odoo-style Reporting menu; kept for their extra
+        // breakdowns (by department / branch / month) and the old-system drill-downs.
+        title: 'Classic Reports',
         items: [
           { route: '/reports/trial-balance', label: 'Trial Balance' },
           { route: '/reports/income-statement', label: 'Income Statement' },
@@ -224,6 +226,51 @@ const NAV_STRUCTURE = [
           { route: '/reports/invoiced-job-orders', label: 'Invoiced Job Orders' },
           { route: '/reports/disbursement', label: 'Disbursement Report' },
           { route: '/reports/parked-bank-items', label: 'Unidentified Bank Items' },
+        ],
+      },
+    ],
+  },
+  {
+    // Odoo's Accounting > Reporting: the statements, the audit and partner reports, and the management
+    // analyses, all on one engine (pages/reports/FinancialReport.jsx, server lib/financialReports.js).
+    label: 'Reporting',
+    alignRight: true,
+    sections: [
+      {
+        title: 'Statement Reports',
+        items: [
+          { route: '/accounting-reports/balance-sheet', label: 'Balance Sheet' },
+          { route: '/accounting-reports/profit-and-loss', label: 'Profit and Loss' },
+          { route: '/accounting-reports/cash-flow', label: 'Cash Flow Statement' },
+          { route: '/accounting-reports/executive-summary', label: 'Executive Summary' },
+          { route: '/reports/bir-tax-return', label: 'Tax Return' },
+        ],
+      },
+      {
+        title: 'Audit Reports',
+        items: [
+          { route: '/accounting-reports/general-ledger', label: 'General Ledger' },
+          { route: '/accounting-reports/trial-balance', label: 'Trial Balance' },
+          { route: '/accounting-reports/journal-audit', label: 'Journal Audit' },
+          { route: '/accounting-reports/check-register', label: 'Check Register' },
+        ],
+      },
+      {
+        title: 'Partner Reports',
+        items: [
+          { route: '/accounting-reports/partner-ledger', label: 'Partner Ledger' },
+          { route: '/accounting-reports/aged-receivable', label: 'Aged Receivable' },
+          { route: '/accounting-reports/aged-payable', label: 'Aged Payable' },
+          { route: '/reports/bir-sales', label: 'Summary Lists of Sales' },
+          { route: '/reports/bir-purchase', label: 'Summary Lists of Purchases' },
+        ],
+      },
+      {
+        title: 'Management',
+        items: [
+          { route: '/accounting-reports/invoice-analysis', label: 'Invoice Analysis' },
+          { route: '/reports/budget-vs-actual', label: 'Budget Report' },
+          { route: '/accounting-reports/audit-trail', label: 'Audit Trail' },
         ],
       },
     ],

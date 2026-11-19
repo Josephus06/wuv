@@ -37,6 +37,11 @@ const { getSbuGroups } = require('../lib/sbuGroups');
 
 const router = express.Router();
 
+// Odoo-style Accounting reports (Balance Sheet, Profit and Loss, Cash Flow, Executive Summary, General
+// Ledger, Trial Balance, Journal Audit, Check Register, Partner Ledger, Aged Receivable / Payable,
+// Invoice Analysis, Audit Trail) -- routes/financialReports.js.
+router.use('/fr', require('./financialReports'));
+
 function today() { return new Date().toISOString().slice(0, 10); }
 
 // Which sales reps the logged-in user may pull a commission report for:

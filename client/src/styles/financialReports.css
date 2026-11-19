@@ -1,0 +1,90 @@
+/* Accounting reports (pages/reports/FinancialReport.jsx) -- Odoo's report look: a row of filter
+   chips, then one table where sections are bold, totals ruled, and amounts drill down. Colours come
+   from the theme tokens, so each company's theme (styles/companyThemes.css) applies. */
+
+.fr-header { align-items: flex-start; }
+.fr-sub { color: var(--color-text-muted); font-size: 13px; margin-top: 2px; }
+.fr-actions { display: flex; gap: 8px; }
+
+.fr-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.fr-drop { position: relative; }
+.fr-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.fr-chip:hover { background: var(--accent-bg); }
+.fr-chip.is-active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.fr-chip .caret { font-size: 10px; opacity: 0.7; }
+.fr-chip-icon { font-size: 13px; }
+.fr-drop-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 50; min-width: 230px; max-height: 420px; overflow: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16); padding: 6px;
+}
+.fr-item {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 7px 10px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.fr-item:hover { background: var(--accent-bg); }
+.fr-item.on { font-weight: 600; color: var(--accent); }
+.fr-check { width: 14px; display: inline-block; color: var(--accent); }
+.fr-menu-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); padding: 8px 10px 4px; }
+.fr-custom { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 4px; border-top: 1px solid var(--border); margin-top: 4px; }
+.fr-custom label { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--color-text-muted); }
+.fr-custom input { width: 150px; }
+.fr-search input { height: 34px; min-width: 220px; }
+
+.fr-error { color: var(--danger); margin-bottom: 12px; }
+.fr-warning { color: var(--warning); margin-bottom: 12px; }
+.fr-card { padding: 0; overflow: hidden; }
+.fr-card.is-loading { opacity: 0.55; transition: opacity 0.2s; }
+.fr-empty { text-align: center; padding: 28px; color: var(--color-text-muted); }
+.fr-print-head { display: none; }
+
+.fr-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.fr-table th { position: sticky; top: 0; background: var(--surface); text-align: left; font-weight: 600; padding: 10px; border-bottom: 2px solid var(--border); white-space: nowrap; z-index: 1; }
+.fr-table th.num { text-align: right; }
+.fr-table th.fr-group-head { text-align: center; border-bottom: 1px solid var(--border); }
+.fr-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.fr-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.fr-table td.neg { color: var(--danger); }
+.fr-table td.up { color: var(--success); }
+.fr-table td.down { color: var(--danger); }
+.fr-name { min-width: 280px; white-space: normal !important; }
+.fr-fold, .fr-fold-space { display: inline-block; width: 18px; }
+.fr-fold { border: 0; background: transparent; color: var(--color-text-muted); cursor: pointer; padding: 0; font-size: 12px; }
+.fr-clickable { cursor: pointer; }
+.fr-link { border: 0; background: transparent; padding: 0; color: var(--text); font: inherit; cursor: pointer; text-align: inherit; }
+.fr-link:hover { color: var(--accent); text-decoration: underline; }
+.fr-name a { color: var(--accent); text-decoration: none; }
+.fr-name a:hover { text-decoration: underline; }
+
+/* Line styles: Odoo's hierarchy of weights. */
+.fr-row.s-title td { font-weight: 700; font-size: 14px; padding-top: 14px; text-transform: uppercase; letter-spacing: 0.02em; border-bottom: 2px solid var(--border); }
+.fr-row.s-section td { font-weight: 700; background: var(--accent-bg); }
+.fr-row.s-subsection td { font-weight: 600; }
+.fr-row.s-group td { font-weight: 600; color: var(--color-text-secondary, var(--text)); }
+.fr-row.s-total td { font-weight: 700; border-top: 1px solid var(--color-border-strong, var(--border)); }
+.fr-row.s-grand td { font-weight: 800; border-top: 2px solid var(--text); border-bottom: 3px double var(--text); background: var(--accent-bg); }
+.fr-row.s-initial td { font-style: italic; color: var(--color-text-muted); }
+.fr-row.s-move td { font-weight: 600; background: rgba(127, 127, 127, 0.05); }
+.fr-row.s-line td, .fr-row.s-plain td { color: var(--text); }
+.fr-row:hover td { background: var(--accent-bg); }
+
+@media (max-width: 760px) {
+  .fr-search input { min-width: 0; width: 100%; }
+  .fr-search { flex: 1 1 100%; }
+  .fr-name { min-width: 200px; }
+}
+
+/* PDF: the browser's print, laid out like Odoo's report PDF -- no app chrome, no filters. */
+@media print {
+  .topnav, .fr-filters, .fr-actions, .fr-header, .fr-warning, .fr-error, .chat-widget, .fr-fold { display: none !important; }
+  .fr-print-head { display: block; padding: 0 0 12px; }
+  .fr-print-head h2 { margin: 0 0 4px; }
+  .fr-card { border: 0; box-shadow: none; }
+  .fr-table { font-size: 11px; }
+  .fr-table th { position: static; }
+  .fr-row:hover td { background: none; }
+  .fr-name a, .fr-link { color: #000; text-decoration: none; }
+  .table-wrap { overflow: visible !important; }
+}

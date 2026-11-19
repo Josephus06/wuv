@@ -282,6 +282,10 @@ async function startServer() {
     // throw ER_NO_SUCH_TABLE and crash-loop the service. Set it up first if it is empty.
     await ensureDatabaseReady();
     await ensureAssignedAtColumn();
+    // The Odoo-style Accounting reports' pages (routes/financialReports.js), so the menu shows them
+    // from the first login after a deploy.
+    await require('./routes/financialReports').ensurePages()
+      .catch((e) => console.error('[accounting reports] pages not registered:', e.message));
     app.listen(PORT, () => console.log(`WVI ERP API listening on http://localhost:${PORT}`));
   } catch (error) {
     console.error('Failed to ensure database schema:', error);

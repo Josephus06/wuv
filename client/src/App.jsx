@@ -118,6 +118,7 @@ import ChartOfAccounts from './pages/ChartOfAccounts';
 import ChartOfAccountEdit from './pages/ChartOfAccountEdit';
 import ChartOfAccountView from './pages/ChartOfAccountView';
 import TrialBalance from './pages/reports/TrialBalance';
+import FinancialReport from './pages/reports/FinancialReport';
 import IncomeStatement from './pages/reports/IncomeStatement';
 import BalanceSheet from './pages/reports/BalanceSheet';
 import GeneralLedger from './pages/reports/GeneralLedger';
@@ -447,6 +448,7 @@ function App() {
         <Route path="/chart-of-accounts/:id/edit" element={<ChartOfAccountEdit />} />
         <Route path="/chart-of-accounts/:id" element={<ChartOfAccountView />} />
         <Route path="/reports/trial-balance" element={<TrialBalance />} />
+        <Route path="/accounting-reports/:slug" element={<FinancialReport />} />
         <Route path="/reports/income-statement" element={<IncomeStatement />} />
         <Route path="/reports/balance-sheet" element={<BalanceSheet />} />
         <Route path="/reports/general-ledger" element={<GeneralLedger />} />
