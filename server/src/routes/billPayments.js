@@ -7,6 +7,7 @@ const { assertPeriodOpen } = require('../lib/accountingPeriod');
 const { computeBillPaymentGl } = require('../lib/glImpact');
 const { postReversalJournal } = require('../lib/reversalJournal');
 const { sendXlsx, day } = require('../lib/xlsxExport');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Reached from an Open Vendor Bill's "Bill Payment" button, confirmed against the real
@@ -110,6 +111,7 @@ async function listBillPayments(query) {
   {
     const { search, status, as_of: asOf, date_from: dateFrom } = req.query;
     const where = [];
+    { const cw = companyWhere('bp.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
     const params = [];
     if (status) { where.push('bp.status = ?'); params.push(status); }
     if (Number(req.query.supplier_id)) { where.push('bp.supplier_id = ?'); params.push(Number(req.query.supplier_id)); }

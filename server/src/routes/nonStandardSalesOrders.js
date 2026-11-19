@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db');
 const { requireAuth, requirePermission } = require('../middleware/auth');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Non-Standard Sales Order (NSSO-<TYPE>-####): a sales-order-like document raised outside the
@@ -214,6 +215,7 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
   try {
     const { search, status, type } = req.query;
     const where = []; const params = [];
+    { const cw = companyWhere('n.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
     if (status) { where.push('n.status = ?'); params.push(status); }
     if (type) { where.push('n.type = ?'); params.push(type); }
     if (search) { where.push('(n.nsso_no LIKE ? OR c.name LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }

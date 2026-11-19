@@ -9,6 +9,7 @@ const ExcelJS = require('exceljs');
 
 const { getSalesRepEmployeeScope } = require('../lib/salesVisibility');
 const { lineDepartmentError } = require('../lib/requireDepartment');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Reached from an Open Invoice's "Credit Memo" button -- the AR mirror of Bill Credit,
@@ -279,6 +280,7 @@ router.get('/by-invoice/:invoiceId', requireAuth, requirePermission(ROUTE, 'can_
 async function listFilter(req) {
   const { search, status, date_from: dateFrom, date_to: dateTo } = req.query;
   const where = [];
+  { const cw = companyWhere('cm.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
   const params = [];
   if (status) { where.push('cm.status = ?'); params.push(status); }
   if (dateFrom) { where.push('cm.date_created >= ?'); params.push(dateFrom); }

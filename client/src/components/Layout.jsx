@@ -7,6 +7,7 @@ import NotificationBell from './NotificationBell';
 import TimeClockChip from './TimeClockChip';
 import { resolveTheme, setTheme, watchSystemTheme } from '../utils/theme';
 import { COMPANY } from '../config/company';
+import CompanySwitcher from './CompanySwitcher';
 
 // Mirrors the real GraphicStar system's topbar arrangement: a row of category
 // dropdowns (Master Lists, Inventory, Sales, Costing, ...) instead of a left
@@ -362,8 +363,7 @@ export default function Layout() {
           {mobileOpen ? '✕' : '☰'}
         </button>
         <div className="topnav-brand">
-          <span className="topnav-brand-full">{COMPANY.name}</span>
-          <span className="topnav-brand-short">{COMPANY.short}</span>
+          <CompanySwitcher />
         </div>
         <nav className="topnav-menu">
           {visibleStructure.map((item) => (item.children || item.sections ? (

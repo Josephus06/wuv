@@ -6,6 +6,7 @@ const { requireAuth, requirePermission } = require('../middleware/auth');
 const { assertPeriodOpen } = require('../lib/accountingPeriod');
 const { liquidationPostError } = require('../lib/liquidationPosting');
 const { journalLinesInPesos } = require('../lib/glImpact');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Journal (JRNL-####): a manual general-journal entry. Balanced debit/credit lines posted straight
@@ -48,6 +49,7 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
   try {
     const { search, status, as_of: asOf } = req.query;
     const where = [];
+    { const cw = companyWhere('j.location_id'); if (cw) where.push(cw); } // topbar company switcher
     const params = [];
     if (status) { where.push('j.status = ?'); params.push(status); }
     if (asOf) { where.push('j.date_created <= ?'); params.push(asOf); }

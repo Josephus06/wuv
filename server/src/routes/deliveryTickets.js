@@ -10,6 +10,7 @@ const { getSalesRepEmployeeScope } = require('../lib/salesVisibility');
 const { postReversalJournal, listReversalJournals } = require('../lib/reversalJournal');
 const { sendXlsx, day } = require('../lib/xlsxExport');
 const { headerDepartmentError } = require('../lib/requireDepartment');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Like Sales Invoices (and unlike Item Fulfillment/Receipt, which borrow their parent's
@@ -151,6 +152,7 @@ router.get('/for-sales-order/:salesOrderId', requireAuth, requirePermission(ROUT
 async function listFilter(req) {
   const { search, status, date_from: dateFrom, as_of: asOf } = req.query;
   const where = [];
+  { const cw = companyWhere('dt.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
   const params = [];
   if (status) { where.push('dt.status = ?'); params.push(status); }
   // Period From / As of Date: inclusive bounds on Date Created.

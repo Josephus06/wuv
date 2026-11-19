@@ -116,6 +116,10 @@ app.use(express.json({ limit: '14mb' }));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
+// The topbar's company switcher: X-Company-Id scopes every list, report and dashboard figure on the
+// request to that company's branches (lib/requestScope.js). No header = Wu Venture, everything.
+app.use('/api', require('./lib/requestScope').headerScopeMiddleware());
+
 app.use('/api/auth', authRoutes);
 app.use('/api/lookups', lookupRoutes);
 app.use('/api/employees', employeeRoutes);
@@ -214,6 +218,7 @@ app.use('/api/collection-forecast', collectionForecastRoutes);
 app.use('/api/reports/collection-aging', collectionAgingReportRoutes);
 app.use('/api/treasury/collection-incentive', collectionIncentiveRoutes);
 app.use('/api/pos-sales-import', posSalesImportRoutes);
+
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

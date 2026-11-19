@@ -6,6 +6,7 @@ const { requireAuth, requirePermission } = require('../middleware/auth');
 const { assertPeriodOpen } = require('../lib/accountingPeriod');
 const { computeBillCreditGl } = require('../lib/glImpact');
 const { lineDepartmentError } = require('../lib/requireDepartment');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Reached from an Open Vendor Bill's "Bill Credit" button, confirmed against the real
@@ -235,6 +236,7 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
   try {
     const { search, status } = req.query;
     const where = [];
+    { const cw = companyWhere('bc.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
     const params = [];
     if (status) { where.push('bc.status = ?'); params.push(status); }
     if (search) {

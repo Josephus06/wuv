@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../api/client';
+import { getActiveCompany } from '../utils/activeCompany';
 
 // Company / Branch picker for the group's books. One set of books covers every company; a report
 // can be run for the whole group (COMPANY.name, e.g. Wu Ventures -- the consolidated view), for one
@@ -23,7 +24,9 @@ export default function CompanyBranchFilter({ value, onChange, showBranch = true
   const [data, setData] = useState({ companies: [], branches: [] });
   useEffect(() => { loadCompanyBranches().then(setData); }, []);
 
-  const companyId = value?.companyId || '';
+  // A company picked in the topbar switcher fixes the company here; only its branches are offered.
+  const active = getActiveCompany();
+  const companyId = active ? String(active.id) : (value?.companyId || '');
   const locationId = value?.locationId || '';
   const branches = data.branches.filter((b) => !companyId || String(b.company_id) === String(companyId));
 
@@ -31,10 +34,16 @@ export default function CompanyBranchFilter({ value, onChange, showBranch = true
     <>
       <div className="field" style={{ minWidth: 180 }}>
         <label>Company</label>
-        <select value={companyId} onChange={(e) => onChange({ companyId: e.target.value, locationId: '' })}>
-          <option value="">All companies</option>
-          {data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+        {active ? (
+          <select value={companyId} disabled title="Set by the company switcher at the top left">
+            <option value={companyId}>{active.name}</option>
+          </select>
+        ) : (
+          <select value={companyId} onChange={(e) => onChange({ companyId: e.target.value, locationId: '' })}>
+            <option value="">All companies</option>
+            {data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        )}
       </div>
       {showBranch && (
         <div className="field" style={{ minWidth: 180 }}>

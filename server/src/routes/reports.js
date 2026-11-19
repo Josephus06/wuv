@@ -2,7 +2,13 @@ const express = require('express');
 const { scopeFromQuery, resolveScope } = require('../lib/companyScope');
 // The company / branch a report is asked for (?companyId= / ?locationId=), resolved to its branches;
 // null for the consolidated Wu Ventures view (lib/companyScope.js).
-const scopeOf = (req) => resolveScope(scopeFromQuery(req.query));
+// With neither, the company picked in the topbar switcher (X-Company-Id, lib/requestScope.js) stands.
+const { currentScope } = require('../lib/requestScope');
+const scopeOf = (req) => {
+  const q = scopeFromQuery(req.query);
+  return (q.companyId || q.locationId) ? resolveScope(q) : Promise.resolve(currentScope());
+};
+const headerCompanyId = () => { const sc = currentScope(); return sc && sc.companyId ? sc.companyId : null; };
 const ExcelJS = require('exceljs');
 const { requireAuth, requirePermission } = require('../middleware/auth');
 const { buildTrialBalance, buildBalanceSheet, buildIncomeStatement, buildGeneralLedger, buildGlTransactions, buildBalanceSheetTransactions } = require('../lib/reportsEngine');
@@ -344,7 +350,7 @@ router.get('/ar-aging', requireAuth, requirePermission(AR_AGING_ROUTE, 'can_view
   try {
     const filters = {
       locationId: req.query.locationId ? Number(req.query.locationId) : null,
-      companyId: Number(req.query.companyId) > 0 ? Number(req.query.companyId) : null,
+      companyId: Number(req.query.companyId) > 0 ? Number(req.query.companyId) : headerCompanyId(),
       noLocation: req.query.noLocation === 'true' || req.query.noLocation === '1',
       nameStarts: req.query.nameStarts || null,
       // Per Term, per Account Officer, per Customer (2026-10-13; lib/arAging.js).
@@ -425,7 +431,7 @@ const AP_AGING_ROUTE = '/reports/ap-aging';
 function apAgingFilters(query) {
   return {
     locationId: query.locationId && Number(query.locationId) > 0 ? Number(query.locationId) : null,
-    companyId: Number(query.companyId) > 0 ? Number(query.companyId) : null,
+    companyId: Number(query.companyId) > 0 ? Number(query.companyId) : headerCompanyId(),
     noLocation: query.noLocation === 'true' || query.noLocation === '1',
     nameStarts: query.nameStarts ? String(query.nameStarts).slice(0, 100) : null,
     includeUnevidenced: query.includeUnevidenced === 'true' || query.includeUnevidenced === '1',
@@ -492,7 +498,7 @@ function arAgingDetailsFilters(query) {
   return {
     customerId: query.customerId && Number(query.customerId) > 0 ? Number(query.customerId) : null,
     locationId: query.locationId && Number(query.locationId) > 0 ? Number(query.locationId) : null,
-    companyId: Number(query.companyId) > 0 ? Number(query.companyId) : null,
+    companyId: Number(query.companyId) > 0 ? Number(query.companyId) : headerCompanyId(),
     noLocation: query.noLocation === 'true' || query.noLocation === '1',
     nameStarts: query.nameStarts ? String(query.nameStarts).slice(0, 100) : null,
     // Per Sales Rep (2026-10-14): each invoice's / credit memo's own rep, as AR Aging's Account Officer.

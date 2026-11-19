@@ -5,6 +5,7 @@ const { requireAuth, requirePermission } = require('../middleware/auth');
 const { computeCustomerRefundGl } = require('../lib/glImpact');
 const { assertPeriodOpen } = require('../lib/accountingPeriod');
 const { headerDepartmentError } = require('../lib/requireDepartment');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Customer Refund (CRFND-####): returns cash to a customer against one or more of their
@@ -72,6 +73,7 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
   try {
     const { search, status } = req.query;
     const where = [];
+    { const cw = companyWhere('cr.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
     const params = [];
     if (status) { where.push('cr.status = ?'); params.push(status); }
     if (search) {

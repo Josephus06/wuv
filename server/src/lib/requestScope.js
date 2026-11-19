@@ -14,10 +14,38 @@ const { scopeFromQuery, resolveScope } = require('./companyScope');
 
 const store = new AsyncLocalStorage();
 
+// The company picked in the topbar's company switcher rides on every API call as an
+// X-Company-Id header (client/src/api/client.js). Mounted once in index.js ahead of the routers, it
+// makes that company the request's scope, so every list, report and dashboard figure that reads
+// currentScope() / companyWhere() shows only that company's branches. No header (Wu Venture) = all.
+// Company -> branches is cached briefly: it is read on every request and changes rarely.
+const cache = new Map();
+const CACHE_MS = 60 * 1000;
+async function scopeForCompany(companyId) {
+  const id = Number(companyId) > 0 ? Number(companyId) : null;
+  if (!id) return null;
+  const hit = cache.get(id);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.scope;
+  const scope = await resolveScope({ companyId: id });
+  cache.set(id, { at: Date.now(), scope });
+  return scope;
+}
+
+function headerScopeMiddleware() {
+  return async (req, res, next) => {
+    try {
+      const scope = await scopeForCompany(req.get('x-company-id'));
+      store.run(scope, next);
+    } catch (err) { next(err); }
+  };
+}
+
+// A router-level scope from ?companyId= / ?locationId=; with neither, the header's company stands.
 function companyScopeMiddleware() {
   return async (req, res, next) => {
     try {
-      const resolved = await resolveScope(scopeFromQuery(req.query));
+      const q = scopeFromQuery(req.query);
+      const resolved = (q.companyId || q.locationId) ? await resolveScope(q) : currentScope();
       store.run(resolved, next);
     } catch (err) { next(err); }
   };
@@ -36,4 +64,13 @@ function scopedTable(table) {
   return `(SELECT * FROM ${table} WHERE office_location_id IN (${ids.length ? ids.join(', ') : 'NULL'}))`;
 }
 
-module.exports = { companyScopeMiddleware, currentScope, scopedTable };
+// `column IN (<the scope's branch ids>)` for a list's WHERE, or null when every company is shown.
+// Rows with no branch belong to no company, so a company view leaves them out.
+function companyWhere(column) {
+  const scope = currentScope();
+  if (!scope) return null;
+  const ids = [...scope.locationIds].map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  return `${column} IN (${ids.length ? ids.join(', ') : 'NULL'})`;
+}
+
+module.exports = { headerScopeMiddleware, companyScopeMiddleware, currentScope, scopedTable, companyWhere };

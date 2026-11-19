@@ -9,6 +9,7 @@ const { assertPeriodOpen, requireOpenPeriod } = require('../lib/accountingPeriod
 const { resolveDefaultLocation } = require('../lib/userLocation');
 const { headerDepartmentError } = require('../lib/requireDepartment');
 const ExcelJS = require('exceljs');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Reached from an Open Invoice's "Accept Payment" button -- the AR mirror of Bill
@@ -504,6 +505,7 @@ function listFilter(query) {
   const dateFrom = asDate(query.date_from);
   const dateTo = asDate(query.date_to);
   const where = [];
+  { const cw = companyWhere('cp.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
   const params = [];
   {
     // Unapplied / Applied (asked 2026-10-05) filter on how much of the payment is still unapplied,

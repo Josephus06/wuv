@@ -4,6 +4,7 @@ const { assignDocNo } = require('../lib/docNumber');
 const { requireAuth, requirePermission, isSystemAdmin, userCan } = require('../middleware/auth');
 const { assertPeriodOpen } = require('../lib/accountingPeriod');
 const { fundTransferPostError, hasLink } = require('../lib/fundTransferPosting');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Fund Transfer (FT-####): moves an amount from one bank account to another. GL: DR the To account
@@ -37,6 +38,7 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
   try {
     const { search, status, as_of: asOf } = req.query;
     const where = [];
+    { const cw = companyWhere('ft.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
     const params = [];
     if (status) { where.push('ft.status = ?'); params.push(status); }
     if (asOf) { where.push('ft.date_created <= ?'); params.push(asOf); }

@@ -13,6 +13,7 @@ const { headerDepartmentError } = require('../lib/requireDepartment');
 const { lineLocation, MISSING_LOCATION } = require('../lib/processLocation');
 const { sendEstimateXlsx } = require('../lib/estimateExtract');
 const { sendXlsx, day } = require('../lib/xlsxExport');
+const { companyWhere } = require('../lib/requestScope');
 
 const STATUS_LABELS = {
   for_csa_assignment: 'For CSA Assignment', pending_supervisor_approval: 'Pending Supervisor Approval',
@@ -377,6 +378,7 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
     // counts, so counts reflect the search/sales-rep/location/date filters currently
     // applied but still show how many rows fall in EACH status).
     const commonWhere = [];
+    { const cw = companyWhere('e.office_location_id'); if (cw) commonWhere.push(cw); } // topbar company switcher
     const commonParams = [];
     if (salesRepId) { commonWhere.push('e.sales_rep_id = ?'); commonParams.push(salesRepId); }
     if (officeLocationId) { commonWhere.push('e.office_location_id = ?'); commonParams.push(officeLocationId); }

@@ -14,6 +14,7 @@ const { whyNotBillable } = require('../lib/estimateBilling');
 const { isHeadOfficeUser } = require('../lib/userLocation');
 const { postReversalJournal, mirror, listReversalJournals } = require('../lib/reversalJournal');
 const { headerDepartmentError } = require('../lib/requireDepartment');
+const { companyWhere } = require('../lib/requestScope');
 
 // An invoice with nothing to collect -- a fully discounted order or JO, gross and amount due both
 // zero -- is Paid in Full the moment it exists, not Open (asked 2026-10-26, INV-84790). Called after
@@ -60,6 +61,7 @@ async function listFilter(query, userId) {
     from, to, department_id: departmentId, type, location_id: locationId,
   } = query;
   const where = [];
+  { const cw = companyWhere('si.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
   const params = [];
   if (status) { where.push('si.status = ?'); params.push(status); }
   // SI or DR -- see normaliseInvoiceType.

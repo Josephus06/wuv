@@ -5,6 +5,7 @@ const { requireAuth, requirePermission } = require('../middleware/auth');
 const { assertPeriodOpen } = require('../lib/accountingPeriod');
 const { depositGlRows } = require('../lib/depositGl');
 const { lineDepartmentError } = require('../lib/requireDepartment');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Bank Deposit (BD-####): deposits one or more NOT-DEPOSITED customer payments into a bank account,
@@ -188,6 +189,7 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
     const from = day(req.query.date_from);
     const to = day(req.query.date_to);
     const where = [];
+    { const cw = companyWhere('d.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
     const params = [];
     if (status) { where.push('d.status = ?'); params.push(status); }
     if (asOf) { where.push('d.date_created <= ?'); params.push(asOf); }

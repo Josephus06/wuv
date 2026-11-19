@@ -9,6 +9,7 @@ const { postReversalJournal, mirror, listReversalJournals } = require('../lib/re
 const { postedBillGlRows, billInLedger } = require('../lib/vendorBillReversal');
 const { liquidationPostError, liquidationBilling } = require('../lib/liquidationPosting');
 const { sendXlsx, day: xlsxDay } = require('../lib/xlsxExport');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Reached from a Received Purchase Order's "Bill" button, confirmed against the real
@@ -245,6 +246,7 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
   try {
     const { search, status } = req.query;
     const where = [];
+    { const cw = companyWhere('vb.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
     const params = [];
     // Paid in Full is two codes: 'paid_in_full' on bills made here, 'paid' on the 20,008 imported --
     // filtering on the first alone hid every imported paid bill, i.e. nearly all of 2025 (2026-10-08).

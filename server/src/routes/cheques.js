@@ -9,6 +9,7 @@ const { computeChequeGl, chequeCreditsByCheque } = require('../lib/glImpact');
 const { postReversalJournal, mirror } = require('../lib/reversalJournal');
 const { sendXlsx, day } = require('../lib/xlsxExport');
 const { fundTransferPostError, hasLink } = require('../lib/fundTransferPosting');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Cheque (CHK-####): pays a payee for expense lines, drawn against a bank account. GL: DR each
@@ -81,6 +82,7 @@ async function listCheques(query) {
   {
     const { search, status, as_of: asOf, date_from: dateFrom } = req.query;
     const where = [];
+    { const cw = companyWhere('c.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
     const params = [];
     // Payee: one supplier / employee / customer (payee_type VENDOR|EMPLOYEE|CUSTOMER + payee_id).
     const kind = PAYEE_KIND_ALIASES[String(req.query.payee_type || '').toUpperCase()];

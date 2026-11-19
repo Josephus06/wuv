@@ -10,6 +10,7 @@ const { buildCommissionReport } = require('../lib/commissionReport');
 const { releaseForPayable } = require('../lib/commissionRelease');
 const { liveFiguresByPayable } = require('../lib/commissionPayableStatus');
 const { headerDepartmentError } = require('../lib/requireDepartment');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 // Commission Payable (CP-####): books a sales employee's earned commission for a commission-month
@@ -189,6 +190,7 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
   try {
     const { search, status } = req.query;
     const where = []; const params = [];
+    { const cw = companyWhere('cp.office_location_id'); if (cw) where.push(cw); } // topbar company switcher
     // Their own commission payables, or everyone's with View All (System Admins have it).
     const meta = await getUserMeta(req.user.id);
     if (!meta.viewAll) { where.push('cp.employee_id = ?'); params.push(meta.employeeId || -1); }

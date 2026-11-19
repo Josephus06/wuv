@@ -1,4 +1,6 @@
 const express = require('express');
+// The topbar company switcher: dashboard figures count only the chosen company's branches.
+const { scopedTable } = require('../lib/requestScope');
 const pool = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { DESIGN_QUEUE_STATUS } = require('../lib/designSupervisorVisibility');
@@ -125,37 +127,37 @@ async function repMetrics(employeeIds) {
 
   const [[weighted]] = await pool.query(
     `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount), 0) AS amount
-     FROM sales_orders WHERE sales_rep_id IN (${placeholders}) AND date_created >= ?`,
+     FROM ${scopedTable('sales_orders')} sales_orders WHERE sales_rep_id IN (${placeholders}) AND date_created >= ?`,
     [...employeeIds, monthStart]
   );
 
   const [[estTotals]] = await pool.query(
     `SELECT COUNT(*) AS created, SUM(status = 'approved') AS approved
-     FROM estimates WHERE sales_rep_id IN (${placeholders})`,
+     FROM ${scopedTable('estimates')} estimates WHERE sales_rep_id IN (${placeholders})`,
     employeeIds
   );
 
   const [[paid]] = await pool.query(
     `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount), 0) AS amount
-     FROM sales_orders WHERE sales_rep_id IN (${placeholders}) AND status = ?`,
+     FROM ${scopedTable('sales_orders')} sales_orders WHERE sales_rep_id IN (${placeholders}) AND status = ?`,
     [...employeeIds, PAID_STATUS]
   );
 
   const unpaidPlaceholders = UNPAID_STATUSES.map(() => '?').join(', ');
   const [[unpaid]] = await pool.query(
     `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount), 0) AS amount
-     FROM sales_orders WHERE sales_rep_id IN (${placeholders}) AND status IN (${unpaidPlaceholders})`,
+     FROM ${scopedTable('sales_orders')} sales_orders WHERE sales_rep_id IN (${placeholders}) AND status IN (${unpaidPlaceholders})`,
     [...employeeIds, ...UNPAID_STATUSES]
   );
 
   const [[allTime]] = await pool.query(
     `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount), 0) AS amount
-     FROM sales_orders WHERE sales_rep_id IN (${placeholders})`,
+     FROM ${scopedTable('sales_orders')} sales_orders WHERE sales_rep_id IN (${placeholders})`,
     employeeIds
   );
 
   const [pipeline] = await pool.query(
-    `SELECT status, COUNT(*) AS count FROM estimates WHERE sales_rep_id IN (${placeholders}) GROUP BY status`,
+    `SELECT status, COUNT(*) AS count FROM ${scopedTable('estimates')} estimates WHERE sales_rep_id IN (${placeholders}) GROUP BY status`,
     employeeIds
   );
 
@@ -192,7 +194,7 @@ async function adminMetrics() {
 
   const [topCustomers] = await pool.query(
     `SELECT c.id, c.name, COUNT(*) AS order_count, COALESCE(SUM(so.total_amount), 0) AS amount
-     FROM sales_orders so JOIN customers c ON c.id = so.customer_id
+     FROM ${scopedTable('sales_orders')} so JOIN customers c ON c.id = so.customer_id
      GROUP BY c.id, c.name ORDER BY amount DESC LIMIT 5`
   );
 
@@ -205,7 +207,7 @@ async function adminMetrics() {
 
   const [salesByDepartment] = await pool.query(
     `SELECT d.id, d.name, COUNT(*) AS order_count, COALESCE(SUM(so.total_amount), 0) AS amount
-     FROM sales_orders so
+     FROM ${scopedTable('sales_orders')} so
      JOIN employees e ON e.id = so.sales_rep_id
      JOIN departments d ON d.id = e.department_id
      WHERE d.name LIKE 'Sales%'
@@ -213,16 +215,16 @@ async function adminMetrics() {
   );
 
   const [[pendingApprovals]] = await pool.query(
-    `SELECT COUNT(*) AS count FROM estimates WHERE status IN ('pending_supervisor_approval', 'pending_customer_approval')`
+    `SELECT COUNT(*) AS count FROM ${scopedTable('estimates')} estimates WHERE status IN ('pending_supervisor_approval', 'pending_customer_approval')`
   );
 
   const monthStart = monthRange();
   const [[salesThisMonth]] = await pool.query(
-    `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount), 0) AS amount FROM sales_orders WHERE date_created >= ?`,
+    `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount), 0) AS amount FROM ${scopedTable('sales_orders')} sales_orders WHERE date_created >= ?`,
     [monthStart]
   );
   const [[orderPaidThisMonth]] = await pool.query(
-    `SELECT COUNT(*) AS count, SUM(status = ?) AS paid FROM sales_orders WHERE date_created >= ?`,
+    `SELECT COUNT(*) AS count, SUM(status = ?) AS paid FROM ${scopedTable('sales_orders')} sales_orders WHERE date_created >= ?`,
     [PAID_STATUS, monthStart]
   );
 
@@ -232,7 +234,7 @@ async function adminMetrics() {
   const [recentEstimates] = await pool.query(
     `SELECT e.id, e.estimate_no, e.status, e.created_at, c.name AS customer_name,
             COALESCE(jo.total, 0) AS total_amount
-     FROM estimates e
+     FROM ${scopedTable('estimates')} e
      JOIN customers c ON c.id = e.customer_id
      LEFT JOIN (
        SELECT estimate_id, SUM(gross_amount) AS total FROM estimate_job_orders GROUP BY estimate_id

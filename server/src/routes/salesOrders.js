@@ -9,6 +9,7 @@ const {
   parseBirZReading, isBirZReading, birKeyParts, birReadingsOverlap,
 } = require('../lib/posBirZReading');
 const { computeSalesOrderGl } = require('../lib/glImpact');
+const { companyWhere } = require('../lib/requestScope');
 
 const router = express.Router();
 const ROUTE = '/sales-orders';
@@ -91,6 +92,7 @@ router.get('/', requireAuth, requirePermission(ROUTE, 'can_view'), async (req, r
     } = req.query;
 
     const commonWhere = [];
+    { const cw = companyWhere('so.office_location_id'); if (cw) commonWhere.push(cw); } // topbar company switcher
     const commonParams = [];
     if (salesRepId) { commonWhere.push('so.sales_rep_id = ?'); commonParams.push(salesRepId); }
     if (officeLocationId) { commonWhere.push('so.office_location_id = ?'); commonParams.push(officeLocationId); }
