@@ -84,13 +84,110 @@ async function categoryIndex(db) {
 const unitCostOf = (item) => (item && !isNonStockItem(item.item_type)
   ? Number(item.average_cost) || Number(item.last_purchase_price) || 0 : 0);
 
+// ---- VAT from the salons' POS BIR Sales Summary (lib/posBirSalesSummary.js) -----------------------
+// The daily sheet's amounts are the day's net sales VAT included; the POS report says how much of it
+// is VAT and how much was VAT-exempt (senior / PWD). On the invoice:
+//   VAT-exempt   one line of its own, split off the day's largest service line, tax code VAT-EXEMPT
+//   the rest     VATable, tax code VAT12-OUT, the day's VAT spread over the lines by amount
+// so the header's Net of Tax + Tax is still the day's net sales, the GL credits Output VAT, and the
+// BIR VAT report reads VATable and exempt sales off the tax codes.
+const VAT_CODE = 'VAT12-OUT';
+const EXEMPT_CODE = 'VAT-EXEMPT';
+
+// The two tax codes, made the first time they are needed (Output VAT's account found by name).
+async function ensureTaxCodes(conn) {
+  const [have] = await conn.query('SELECT code FROM taxes WHERE code IN (?, ?)', [VAT_CODE, EXEMPT_CODE]);
+  const got = new Set(have.map((h) => h.code));
+  if (got.size === 2) return;
+  const [[acct]] = await conn.query(
+    `SELECT id FROM chart_of_accounts WHERE is_summary = 0 AND (account_name REGEXP 'output (vat|tax)' OR account_code = '21100' OR account_name REGEXP 'vat payable')
+      ORDER BY account_name REGEXP 'output (vat|tax)' DESC, account_code = '21100' DESC, account_code LIMIT 1`);
+  if (!acct) throw Object.assign(new Error('There is no Output VAT account in the chart of accounts -- add one (e.g. 21100 Output VAT) before importing VAT.'), { status: 400 });
+  if (!got.has(VAT_CODE)) await conn.query('INSERT INTO taxes (code, name, rate, tax_account_id, is_active) VALUES (?, ?, 12, ?, 1)', [VAT_CODE, 'Output VAT 12% (sales)', acct.id]);
+  if (!got.has(EXEMPT_CODE)) await conn.query('INSERT INTO taxes (code, name, rate, tax_account_id, is_active) VALUES (?, ?, 0, NULL, 1)', [EXEMPT_CODE, 'VAT-exempt sales (senior / PWD)']);
+}
+
+// lines: [{ amount, nonstock }] -> the same lines with tax_code / tax_amount / net_of_tax, plus an exempt line
+// split off the largest service line (returned with `exempt_of` = the index it came from).
+function allocateVat(lines, vat) {
+  const out = lines.map((l) => ({ ...l, amount: round2(l.amount) }));
+  const exemptNet = round2(vat.exempt_net);
+  if (exemptNet > 0.005) {
+    const pool = out.map((l, i) => ({ l, i })).filter((x) => x.l.nonstock && x.l.amount > 0);
+    const pick = (pool.length ? pool : out.map((l, i) => ({ l, i }))).sort((a, b) => b.l.amount - a.l.amount)[0];
+    if (!pick || pick.l.amount < exemptNet - 0.005) throw Object.assign(new Error(`The day's VAT-exempt sales (${exemptNet.toFixed(2)}) are more than any one line of the invoice.`), { status: 400 });
+    pick.l.amount = round2(pick.l.amount - exemptNet);
+    out.push({ ...pick.l, amount: exemptNet, exempt: true, exempt_of: pick.i });
+  }
+  const vatable = out.filter((l) => !l.exempt);
+  const base = vatable.reduce((s, l) => s + l.amount, 0);
+  let left = round2(vat.vat);
+  for (const l of out) {
+    if (l.exempt) { Object.assign(l, { tax_code: EXEMPT_CODE, tax_amount: 0, net_of_tax: l.amount }); continue; }
+    const tax = base > 0 ? round2((vat.vat * l.amount) / base) : 0;
+    left = round2(left - tax);
+    Object.assign(l, { tax_code: VAT_CODE, tax_amount: tax });
+  }
+  // Rounding: whatever the shares left over goes on the largest VATable line.
+  const big = vatable.sort((a, b) => b.amount - a.amount)[0];
+  if (big && Math.abs(left) >= 0.005) big.tax_amount = round2(big.tax_amount + left);
+  for (const l of out) if (!l.exempt) l.net_of_tax = round2(l.amount - l.tax_amount);
+  return out;
+}
+
+// Adds the POS report's VAT to an invoice already imported from the daily sheet without it (the
+// September invoices): its total, amount due and payments stay as they are.
+async function addVatToInvoice(conn, invoiceId, vat, userId) {
+  await ensureTaxCodes(conn);
+  const [lines] = await conn.query(
+    `SELECT sil.*, i.item_type FROM sales_invoice_lines sil LEFT JOIN inventories i ON i.id = sil.item_id
+      WHERE sil.sales_invoice_id = ? ORDER BY sil.id`, [invoiceId]);
+  const alloc = allocateVat(lines.map((l) => ({ amount: Number(l.gross_amount), nonstock: isNonStockItem(l.item_type) })), vat);
+  for (let i = 0; i < alloc.length; i += 1) {
+    const a = alloc[i];
+    if (!a.exempt) {
+      const l = lines[i];
+      const qty = Number(l.quantity) || 0;
+      await conn.query(
+        `UPDATE sales_invoice_lines SET subtotal = ?, gross_amount = ?, net_of_tax = ?, tax_amount = ?, tax_code = ?,
+                price_per_unit = IF(? > 0, ?, price_per_unit), disc_price_per_unit = IF(? > 0, ?, disc_price_per_unit) WHERE id = ?`,
+        [a.amount, a.amount, a.net_of_tax, a.tax_amount, a.tax_code, qty, qty ? round2(a.amount / qty) : 0, qty, qty ? round2(a.amount / qty) : 0, l.id]);
+    } else {
+      const src = lines[a.exempt_of];
+      await conn.query(
+        `INSERT INTO sales_invoice_lines
+           (sales_invoice_id, item_id, description, quantity, units, price_per_unit, subtotal, disc_percent, disc_amount,
+            disc_price_per_unit, net_of_tax, tax_code, tax_amount, gross_amount, pos_category)
+         VALUES (?, ?, ?, 0, NULL, 0, ?, 0, 0, 0, ?, ?, 0, ?, ?)`,
+        [invoiceId, src.item_id, `${src.description} (VAT-exempt: senior / PWD)`, a.amount, a.amount, EXEMPT_CODE, a.amount, src.pos_category]);
+    }
+  }
+  await conn.query(
+    'UPDATE sales_invoices SET net_of_tax = gross_amount - ?, tax_amount = ?, bs_si_no = COALESCE(NULLIF(bs_si_no, \'\'), ?) WHERE id = ?',
+    [round2(vat.vat), round2(vat.vat), vat.si_range, invoiceId]);
+  await conn.query(
+    `INSERT INTO audit_logs (auditable_type, auditable_id, event_type, field_name, old_value, new_value, set_by_user_id)
+     VALUES ('SalesInvoice', ?, 'Updated', 'tax_amount', '0', ?, ?)`,
+    [invoiceId, `${round2(vat.vat).toFixed(2)} VAT from the POS BIR Sales Summary (SI ${vat.si_range || '-'})`, userId]);
+}
+
 // Pairs the parsed reports into shifts and works out everything the preview shows.
 async function buildShifts(db, reports) {
   const items = await itemIndex(db);
   const categories = await categoryIndex(db);
   const byKey = new Map();
   const problems = [];
+  // Days off a POS BIR Sales Summary, paired with the daily sheet's days below.
+  const birDays = reports.filter((r) => r.kind === 'bir');
+  const birUsed = new Set();
+  const birFor = (c) => {
+    const same = birDays.filter((b) => b.parsed.date === c.closed_date);
+    if (same.length <= 1) return same[0] || null;
+    const words = norm(c.branch_code).split(' ').filter((w) => w.length > 2);
+    return same.find((b) => words.every((w) => norm(`${b.parsed.store_name} ${b.parsed.address}`).includes(w))) || null;
+  };
   for (const r of reports) {
+    if (r.kind === 'bir') continue;
     if (!r.parsed.ok) { problems.push({ source_file: r.source_file, errors: r.parsed.errors || ['Could not be read.'] }); continue; }
     if (r.kind === 'unknown') { problems.push({ source_file: r.source_file, errors: r.parsed.errors }); continue; }
     const key = shiftKeyOf(r.parsed);
@@ -146,12 +243,32 @@ async function buildShifts(db, reports) {
     if (noCost.length) warnings.push(`No cost on file for ${[...new Set(noCost)].join(', ')} -- they leave stock at 0.00 cost.`);
 
     let payment = null;
+    let vat = null;
     if (s.daily_payment) {
+      // The day's VAT, off the POS BIR Sales Summary uploaded with the sheet; both must agree on net sales.
+      const bir = birFor(c);
+      if (bir) {
+        birUsed.add(bir);
+        const b = bir.parsed;
+        if (Math.abs(b.net_sales - total) > 0.01) {
+          errors.push(`The POS BIR Sales Summary's net sales for ${c.closed_date} is ${b.net_sales.toFixed(2)}, the daily sheet's is ${total.toFixed(2)} -- they must agree before the day is booked.`);
+        }
+        if (b.zero_rated) errors.push(`${c.closed_date} has zero-rated sales on the POS report, which this import does not book yet.`);
+        vat = {
+          vat: round2(b.vat_payable), vatable: round2(b.vatable),
+          exempt_net: round2(b.exempt - b.sc - b.pwd - b.naac - b.solo),
+          si_range: b.si_from && b.si_to ? `${b.si_from}-${b.si_to}` : null,
+        };
+      } else if (birDays.length) {
+        errors.push(`The POS BIR Sales Summary uploaded has no row for ${c.closed_date} -- upload the month that has it.`);
+      } else {
+        warnings.push('No POS BIR Sales Summary uploaded with the sheet -- the invoice is made without VAT. Upload the month\'s BIR Sales Summary (PDF) with the sheet to book the VAT.');
+      }
       // The salons' daily sheet makes the invoice only: it is left Open, and the money is recorded
       // with Pay on the invoice (asked 2026-11-20 -- "make the status open since no payment created").
       // No payments and no cash short / over journal are made from the sheet any more.
       const p = s.daily_payment;
-      warnings.push(`Left open: record the day's ${[p.cash ? `cash ${p.cash.toFixed(2)}` : '', p.gcash ? `GCash ${p.gcash.toFixed(2)}` : '', p.gc_used ? `gift certificates ${p.gc_used.toFixed(2)}` : ''].filter(Boolean).join(', ') || 'payments'} with Pay on the invoice.`);
+      warnings.push(`Left open: record the day's ${[p.cash ? `cash ${p.cash.toFixed(2)}` : '', p.gcash ? `GCash ${p.gcash.toFixed(2)}` : '', p.gc_used ? `gift certificates ${p.gc_used.toFixed(2)}` : ''].filter(Boolean).join(', ') || 'payments'} with Accept Payment on the invoice.`);
     } else if (s.z) {
       // The Z-Reading's amounts are under .figures (lib/posZReading.js).
       const z = s.z.figures || {};
@@ -170,21 +287,44 @@ async function buildShifts(db, reports) {
     }
 
     // Already booked? As an invoice (this import) or as a Z-Reading counter-sales Sales Order.
-    const [[inv]] = await db.query('SELECT id, invoice_no FROM sales_invoices WHERE pos_import_key = ?', [s.key]);
+    const [[inv]] = await db.query('SELECT id, invoice_no, gross_amount, tax_amount, status FROM sales_invoices WHERE pos_import_key = ?', [s.key]);
     const [[so]] = await db.query(
       `SELECT so.id, so.sales_order_no FROM sales_order_lines sol JOIN sales_orders so ON so.id = sol.sales_order_id
         WHERE sol.pos_import_key = ? AND so.status <> 'cancelled' LIMIT 1`, [`Z:${s.key}`]);
-    if (inv) errors.push(`Already imported as ${inv.invoice_no}.`);
+    // A day already imported from the sheet without VAT (before the POS report was used) gets its VAT
+    // added in place -- same total, same payments -- instead of being refused as a duplicate.
+    let mode = 'create';
+    if (inv && vat && !Number(inv.tax_amount) && inv.status !== 'cancelled') {
+      if (Math.abs(Number(inv.gross_amount) - total) > 0.01) {
+        errors.push(`Already imported as ${inv.invoice_no} for ${Number(inv.gross_amount).toFixed(2)}, not this sheet's ${total.toFixed(2)} -- correct the invoice before adding its VAT.`);
+      } else {
+        mode = 'add_vat';
+        warnings.length = 0;
+        warnings.push(`Already imported as ${inv.invoice_no} without VAT -- its VAT is added from the POS report; its total, amount due and payments stay as they are.`);
+      }
+    } else if (inv) {
+      errors.push(`Already imported as ${inv.invoice_no}${Number(inv.tax_amount) ? ' (with VAT)' : ''}.`);
+    }
     if (so) errors.push(`Already recorded as counter-sales Sales Order ${so.sales_order_no} -- cancel it first, or this shift's sales are booked twice.`);
 
     shifts.push({
-      key: s.key, ok: !errors.length, errors, warnings, daily: !!s.daily_payment,
+      key: s.key, ok: !errors.length, errors, warnings, daily: !!s.daily_payment, mode, vat,
       store: c.store_name, shift: c.shift, branch_code: c.branch_code,
       date: c.closed_date, closed_by: c.closed_by,
       category_file: s.category_file, z_file: s.z_file || null,
       total, lines, new_items: [...created.values()], payment,
       existing_invoice: inv || null,
     });
+  }
+  // POS report days with no daily-sheet row: nothing is booked for them, so say which.
+  const unpaired = new Map();
+  for (const b of birDays) {
+    if (birUsed.has(b)) continue;
+    if (!unpaired.has(b.source_file)) unpaired.set(b.source_file, []);
+    unpaired.get(b.source_file).push(b.parsed.date);
+  }
+  for (const [file, dates] of unpaired) {
+    problems.push({ source_file: file, errors: [`${dates.length} day(s) on the POS report have no row in the daily sales sheet uploaded, so nothing was booked for them: ${dates.join(', ')}.`] });
   }
   return { shifts, problems };
 }
@@ -223,8 +363,13 @@ async function createMissingItems(conn, shift, userId) {
 
 // One shift -> invoice (+ payments). Runs inside the caller's transaction on `conn`.
 async function importShift(conn, shift, { customerId, locationId, departmentId, userId, salesRepId }) {
+  // A day already imported without VAT: only its VAT is added (see buildShifts).
+  if (shift.mode === 'add_vat') {
+    await addVatToInvoice(conn, shift.existing_invoice.id, shift.vat, userId);
+    return { id: shift.existing_invoice.id, invoice_no: shift.existing_invoice.invoice_no, total: shift.total, payments: [], journal: null, vat_added: shift.vat.vat };
+  }
   const items = await createMissingItems(conn, shift, userId);
-  const lines = shift.lines.map((l) => {
+  let lines = shift.lines.map((l) => {
     const item = items.get(matchKey(l.description));
     const unitCost = unitCostOf(item);
     return {
@@ -232,9 +377,25 @@ async function importShift(conn, shift, { customerId, locationId, departmentId, 
       unit_cost: unitCost || null,
       cost_amount: unitCost ? round2(unitCost * Number(l.quantity)) : null,
       net: round2(l.amount),
+      gross: round2(l.amount), tax_code: null, tax_amount: 0,
+      nonstock: isNonStockItem(item.item_type),
     };
   });
   const total = round2(lines.reduce((t, l) => t + l.net, 0));
+  // The POS report's VAT: lines split VATable / exempt, the VAT taken out of each VATable line's net.
+  const vatAmt = shift.vat ? round2(shift.vat.vat) : 0;
+  if (shift.vat) {
+    await ensureTaxCodes(conn);
+    const alloc = allocateVat(lines.map((l) => ({ amount: l.gross, nonstock: l.nonstock })), shift.vat);
+    lines = alloc.map((a, i) => {
+      const src = a.exempt ? lines[a.exempt_of] : lines[i];
+      return a.exempt
+        ? { ...src, description: `${src.description} (VAT-exempt: senior / PWD)`, quantity: 0, unit_price: 0, unit_cost: null, cost_amount: null,
+          gross: a.amount, net: a.net_of_tax, tax_code: a.tax_code, tax_amount: 0 }
+        : { ...src, gross: a.amount, net: a.net_of_tax, tax_code: a.tax_code, tax_amount: a.tax_amount,
+          unit_price: Number(src.quantity) ? round2(a.amount / Number(src.quantity)) : src.unit_price };
+    });
+  }
   const memo = shift.daily
     ? `Daily sales -- ${shift.store || shift.branch_code} (${shift.date}), from the daily sales sheet`
     : `POS shift ${shift.branch_code}/${shift.shift} -- ${shift.store || ''} (closed ${shift.date}${shift.closed_by ? ` by ${shift.closed_by}` : ''})`;
@@ -242,10 +403,10 @@ async function importShift(conn, shift, { customerId, locationId, departmentId, 
     `INSERT INTO sales_invoices
        (invoice_no, invoice_type, customer_id, date_created, date_due, office_location_id, department_id, sales_rep_id, memo,
         withholding_tax_pct, subtotal, discount_amount, net_of_tax, ewt_amount, tax_amount, gross_amount, amount_due,
-        created_by_user_id, pos_import_key)
-     VALUES ('', 'SI', ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, 0, 0, ?, ?, ?, ?)`,
+        created_by_user_id, pos_import_key, bs_si_no)
+     VALUES ('', 'SI', ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, 0, ?, ?, ?, ?, ?, ?)`,
     [customerId, shift.date, shift.date, locationId, departmentId || null, salesRepId || null, memo.slice(0, 1000),
-      total, total, total, total, userId, shift.key]);
+      total, round2(total - vatAmt), vatAmt, total, total, userId, shift.key, (shift.vat && shift.vat.si_range) || null]);
   const invoiceId = r.insertId;
   const invoiceNo = await assignDocNo(conn, { table: 'sales_invoices', column: 'invoice_no', prefix: 'INV-', id: invoiceId });
   for (const l of lines) {
@@ -253,8 +414,8 @@ async function importShift(conn, shift, { customerId, locationId, departmentId, 
       `INSERT INTO sales_invoice_lines
          (sales_invoice_id, item_id, description, quantity, units, price_per_unit, subtotal, disc_percent, disc_amount,
           disc_price_per_unit, net_of_tax, tax_code, tax_amount, gross_amount, unit_cost, cost_amount, pos_category)
-       VALUES (?, ?, ?, ?, NULL, ?, ?, 0, 0, ?, ?, NULL, 0, ?, ?, ?, ?)`,
-      [invoiceId, l.item_id, l.description, l.quantity, l.unit_price, l.net, l.unit_price, l.net, l.net,
+       VALUES (?, ?, ?, ?, NULL, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [invoiceId, l.item_id, l.description, l.quantity, l.unit_price, l.gross, l.unit_price, l.net, l.tax_code, l.tax_amount, l.gross,
         l.unit_cost, l.cost_amount, l.pos_category]);
   }
   await conn.query(
@@ -323,4 +484,4 @@ async function importShift(conn, shift, { customerId, locationId, departmentId, 
   return { id: invoiceId, invoice_no: invoiceNo, total, payments, journal };
 }
 
-module.exports = { readReport, buildShifts, importShift, shiftKeyOf };
+module.exports = { readReport, buildShifts, importShift, shiftKeyOf, allocateVat, ensureTaxCodes };

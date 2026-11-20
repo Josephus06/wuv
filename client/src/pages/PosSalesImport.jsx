@@ -86,9 +86,10 @@ export default function PosSalesImport() {
           the products leave the branch&apos;s stock, and the Z-Reading&apos;s cash and GCash pay the invoice.
         </p>
         <p className="muted">
-          For the salons (Cuts For Tots), pick the month&apos;s <strong>Daily Sales Reports</strong> workbook (.xlsx) instead: each day on its
-          SALES SUMMARY sheet becomes one invoice, paid by that day&apos;s GCash, cash and gift certificates used, with any cash short
-          or over booked to Cash Short and Over. Days already imported are skipped, so the same workbook can be uploaded again as the month fills in.
+          For the salons (Cuts For Tots), pick the month&apos;s <strong>Daily Sales Reports</strong> workbook (.xlsx) together with the POS
+          <strong> BIR Sales Summary</strong> (PDF) for the same month. Each day becomes one Open invoice: the sheet gives its services, products
+          and certificates, the POS report its VAT, VAT-exempt (senior / PWD) sales and receipt numbers -- and the two must agree on the day&apos;s
+          net sales. Record the day&apos;s money with Accept Payment on the invoice. A day already imported without VAT gets its VAT added.
         </p>
         <div className="filter-grid">
           <div className="field">
@@ -109,7 +110,7 @@ export default function PosSalesImport() {
               columns={[{ key: 'name', label: 'Name' }]} searchKeys={['name']} onSelect={setDepartment} />
           </div>
           <div className="field">
-            <label>POS reports (PDF) or daily sales sheet (.xlsx)</label>
+            <label>POS reports (PDF) and/or daily sales sheet (.xlsx)</label>
             <input type="file" accept="application/pdf,.pdf,.xlsx" multiple onChange={(e) => readFiles([...(e.target.files || [])])} />
           </div>
         </div>
@@ -133,7 +134,7 @@ export default function PosSalesImport() {
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th></th><th>Shift</th><th>Date</th><th>Store</th><th style={{ textAlign: 'right' }}>Sales</th>
+                <tr><th></th><th>Shift</th><th>Date</th><th>Store</th><th style={{ textAlign: 'right' }}>Sales</th><th style={{ textAlign: 'right' }}>VAT</th>
                   <th style={{ textAlign: 'right' }}>Cash</th><th style={{ textAlign: 'right' }}>GCash</th>
                   <th style={{ textAlign: 'right' }}>Unpaid</th><th>New items</th><th>Status</th></tr>
               </thead>
@@ -146,19 +147,20 @@ export default function PosSalesImport() {
                       <td>{s.date}</td>
                       <td>{s.store}</td>
                       <td style={{ textAlign: 'right' }}>{s.total != null ? money(s.total) : ''}</td>
+                      <td style={{ textAlign: 'right' }} title={s.vat?.si_range ? `POS receipts ${s.vat.si_range}` : undefined}>{s.vat ? money(s.vat.vat) : '—'}</td>
                       <td style={{ textAlign: 'right' }}>{s.payment ? money(s.payment.cash) : '—'}</td>
                       <td style={{ textAlign: 'right' }}>{s.payment ? money(s.payment.gcash) : '—'}</td>
                       <td style={{ textAlign: 'right' }}>{s.payment ? money(s.payment.unpaid) : s.total != null ? money(s.total) : ''}</td>
                       <td>{(s.new_items || []).length || ''}</td>
                       <td>
-                        {s.ok ? <span style={{ color: 'var(--success)' }}>Ready</span> : <span style={{ color: 'var(--danger)' }}>{(s.errors || []).join(' ')}</span>}
+                        {s.ok ? <span style={{ color: 'var(--success)' }}>{s.mode === 'add_vat' ? 'Ready: add VAT' : 'Ready'}</span> : <span style={{ color: 'var(--danger)' }}>{(s.errors || []).join(' ')}</span>}
                         {(s.warnings || []).map((w) => <div key={w} className="muted" style={{ fontSize: 12, color: 'var(--warning)' }}>{w}</div>)}
                       </td>
                     </tr>
                     {open.has(s.key) && (
                       <tr>
                         <td />
-                        <td colSpan={9}>
+                        <td colSpan={10}>
                           <table>
                             <thead><tr><th>Category</th><th>Item</th><th style={{ textAlign: 'right' }}>Qty</th><th style={{ textAlign: 'right' }}>Price</th><th style={{ textAlign: 'right' }}>Amount</th><th>Type</th><th style={{ textAlign: 'right' }}>Unit cost</th></tr></thead>
                             <tbody>
@@ -191,13 +193,14 @@ export default function PosSalesImport() {
           <strong>Imported</strong>
           <div className="table-wrap" style={{ marginTop: 8 }}>
             <table>
-              <thead><tr><th>Shift</th><th>Invoice</th><th style={{ textAlign: 'right' }}>Total</th><th>Payments</th><th>Cash short / over</th><th>Result</th></tr></thead>
+              <thead><tr><th>Shift</th><th>Invoice</th><th style={{ textAlign: 'right' }}>Total</th><th style={{ textAlign: 'right' }}>VAT added</th><th>Payments</th><th>Cash short / over</th><th>Result</th></tr></thead>
               <tbody>
                 {results.map((r) => (
                   <tr key={r.key}>
                     <td>{r.key}</td>
                     <td>{r.invoice ? <Link to={`/sales-invoices/${r.invoice.id}`}>{r.invoice.invoice_no}</Link> : ''}</td>
                     <td style={{ textAlign: 'right' }}>{r.invoice ? money(r.invoice.total) : ''}</td>
+                    <td style={{ textAlign: 'right' }}>{r.invoice?.vat_added ? money(r.invoice.vat_added) : ''}</td>
                     <td>{(r.invoice?.payments || []).map((p) => (
                       <div key={p.id}><Link to={`/customer-payments/${p.id}`}>{p.customer_payment_no}</Link> {p.method} {money(p.amount)}</div>
                     ))}</td>

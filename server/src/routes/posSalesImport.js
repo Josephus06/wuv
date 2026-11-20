@@ -13,6 +13,7 @@ const { assertPeriodOpen } = require('../lib/accountingPeriod');
 const { extractPdfText } = require('../lib/posCategorySales');
 const { readReport, buildShifts, importShift } = require('../lib/posSalesImport');
 const { parseDailySummary } = require('../lib/posDailySummary');
+const { isBirSalesSummary, parseBirSalesSummary } = require('../lib/posBirSalesSummary');
 const { currentScope } = require('../lib/requestScope');
 
 const router = express.Router();
@@ -44,6 +45,15 @@ async function readFiles(files) {
     try { text = await extractPdfText(file.buffer); } catch { text = ''; }
     if (text.replace(/\s/g, '').length < 100) {
       reports.push({ source_file: file.originalname, kind: 'unknown', parsed: { ok: false, errors: ['This PDF has no text in it (a scan or photo) -- export the report from the POS as a PDF.'] } });
+      continue;
+    }
+    // The salons' POS BIR Sales Summary: every day on it pairs with the daily sheet's day (lib/posSalesImport.js).
+    if (isBirSalesSummary(text)) {
+      const bir = parseBirSalesSummary(text);
+      if (!bir.ok) { reports.push({ source_file: file.originalname, kind: 'unknown', parsed: { ok: false, errors: bir.errors } }); continue; }
+      for (const d of bir.days) {
+        reports.push({ source_file: file.originalname, kind: 'bir', parsed: { ok: true, ...d, store_name: bir.store_name, address: bir.address, tin: bir.tin } });
+      }
       continue;
     }
     reports.push({ source_file: file.originalname, ...readReport(text) });
