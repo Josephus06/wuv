@@ -207,6 +207,25 @@ async function buildShifts(db, reports) {
     s[`${r.kind}_file`] = r.source_file;
   }
 
+  // A POS report day with no daily-sheet row (asked 2026-11-20: "make the PDF work on its own"): the
+  // invoice is made from the POS report alone -- one Hair Salon Services line for the day's net sales,
+  // its VAT and VAT-exempt part as the report says. No split into services / products / certificates.
+  const sheetDays = [...byKey.values()].filter((x) => x.daily_payment && x.category);
+  for (const b of birDays) {
+    const same = sheetDays.filter((x) => x.category.closed_date === b.parsed.date);
+    if (same.length) continue; // paired with the sheet's day below
+    const p = b.parsed;
+    const key = `POSDAY:${p.tin || p.store_name}|${p.date}`;
+    if (byKey.has(key)) { problems.push({ source_file: b.source_file, errors: [`${p.date} is on more than one POS report uploaded.`] }); continue; }
+    byKey.set(key, {
+      key, bir: b, pos_only: true, daily_payment: { pos_only: true }, category_file: b.source_file,
+      category: {
+        closed_date: p.date, store_name: p.store_name, branch_code: p.store_name, shift: 'DAY', total_amount: p.net_sales,
+        categories: [{ name: 'HAIR SERVICES', items: [{ description: 'HAIR SALON SERVICES', quantity: 1, unit_price: p.net_sales, amount: p.net_sales }] }],
+      },
+    });
+  }
+
   const shifts = [];
   for (const s of byKey.values()) {
     const warnings = [];
@@ -246,7 +265,7 @@ async function buildShifts(db, reports) {
     let vat = null;
     if (s.daily_payment) {
       // The day's VAT, off the POS BIR Sales Summary uploaded with the sheet; both must agree on net sales.
-      const bir = birFor(c);
+      const bir = s.bir || birFor(c);
       if (bir) {
         birUsed.add(bir);
         const b = bir.parsed;
@@ -268,7 +287,8 @@ async function buildShifts(db, reports) {
       // with Pay on the invoice (asked 2026-11-20 -- "make the status open since no payment created").
       // No payments and no cash short / over journal are made from the sheet any more.
       const p = s.daily_payment;
-      warnings.push(`Left open: record the day's ${[p.cash ? `cash ${p.cash.toFixed(2)}` : '', p.gcash ? `GCash ${p.gcash.toFixed(2)}` : '', p.gc_used ? `gift certificates ${p.gc_used.toFixed(2)}` : ''].filter(Boolean).join(', ') || 'payments'} with Accept Payment on the invoice.`);
+      if (s.pos_only) warnings.push(`From the POS report alone (no daily sheet row): one Hair Salon Services line for ${total.toFixed(2)}, left Open -- record the day's money with Accept Payment.`);
+      else warnings.push(`Left open: record the day's ${[p.cash ? `cash ${p.cash.toFixed(2)}` : '', p.gcash ? `GCash ${p.gcash.toFixed(2)}` : '', p.gc_used ? `gift certificates ${p.gc_used.toFixed(2)}` : ''].filter(Boolean).join(', ') || 'payments'} with Accept Payment on the invoice.`);
     } else if (s.z) {
       // The Z-Reading's amounts are under .figures (lib/posZReading.js).
       const z = s.z.figures || {};
@@ -308,7 +328,7 @@ async function buildShifts(db, reports) {
     if (so) errors.push(`Already recorded as counter-sales Sales Order ${so.sales_order_no} -- cancel it first, or this shift's sales are booked twice.`);
 
     shifts.push({
-      key: s.key, ok: !errors.length, errors, warnings, daily: !!s.daily_payment, mode, vat,
+      key: s.key, ok: !errors.length, errors, warnings, daily: !!s.daily_payment, pos_only: !!s.pos_only, mode, vat,
       store: c.store_name, shift: c.shift, branch_code: c.branch_code,
       date: c.closed_date, closed_by: c.closed_by,
       category_file: s.category_file, z_file: s.z_file || null,
@@ -396,8 +416,15 @@ async function importShift(conn, shift, { customerId, locationId, departmentId, 
           unit_price: Number(src.quantity) ? round2(a.amount / Number(src.quantity)) : src.unit_price };
     });
   }
+  // A salon day is booked once per branch, whether it came from the daily sheet or the POS report alone.
+  if (shift.daily) {
+    const [[dup]] = await conn.query(
+      `SELECT invoice_no FROM sales_invoices WHERE office_location_id = ? AND date_created = ? AND status <> 'cancelled'
+          AND (pos_import_key LIKE 'DAILY:%' OR pos_import_key LIKE 'POSDAY:%') LIMIT 1`, [locationId, shift.date]);
+    if (dup) throw Object.assign(new Error(`This branch's sales for ${shift.date} are already booked as ${dup.invoice_no}.`), { status: 409 });
+  }
   const memo = shift.daily
-    ? `Daily sales -- ${shift.store || shift.branch_code} (${shift.date}), from the daily sales sheet`
+    ? `Daily sales -- ${shift.store || shift.branch_code} (${shift.date}), from the ${shift.pos_only ? 'POS BIR Sales Summary' : 'daily sales sheet'}`
     : `POS shift ${shift.branch_code}/${shift.shift} -- ${shift.store || ''} (closed ${shift.date}${shift.closed_by ? ` by ${shift.closed_by}` : ''})`;
   const [r] = await conn.query(
     `INSERT INTO sales_invoices

@@ -90,6 +90,8 @@ export default function PosSalesImport() {
           <strong> BIR Sales Summary</strong> (PDF) for the same month. Each day becomes one Open invoice: the sheet gives its services, products
           and certificates, the POS report its VAT, VAT-exempt (senior / PWD) sales and receipt numbers -- and the two must agree on the day&apos;s
           net sales. Record the day&apos;s money with Accept Payment on the invoice. A day already imported without VAT gets its VAT added.
+          No daily sheet for the month? The BIR Sales Summary can be imported on its own: each day becomes one invoice with a Hair Salon
+          Services line (and a VAT-exempt line), with the exact VAT and receipt numbers. A day is never booked twice for a branch.
         </p>
         <div className="filter-grid">
           <div className="field">
