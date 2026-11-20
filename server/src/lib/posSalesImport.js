@@ -147,13 +147,11 @@ async function buildShifts(db, reports) {
 
     let payment = null;
     if (s.daily_payment) {
-      // Gift certificates redeemed pay first (they were paid for when bought), then GCash, then cash.
+      // The salons' daily sheet makes the invoice only: it is left Open, and the money is recorded
+      // with Pay on the invoice (asked 2026-11-20 -- "make the status open since no payment created").
+      // No payments and no cash short / over journal are made from the sheet any more.
       const p = s.daily_payment;
-      const applied = Math.min(round2(p.gc_used + p.gcash + p.cash), total);
-      payment = { ...p, applied, unpaid: round2(total - applied) };
-      if (p.short > 0) warnings.push(`Cash short ${p.short.toFixed(2)}: ${p.deposit.toFixed(2)} deposited of ${(p.cash + p.gc_used).toFixed(2)} cash sales -- booked to Cash Short and Over.`);
-      if (p.short < 0) warnings.push(`Cash over ${(-p.short).toFixed(2)} -- booked to Cash Short and Over.`);
-      if (p.gift_sold > 0) warnings.push(`Gift certificates sold ${p.gift_sold.toFixed(2)}: the sheet's cash and GCash do not include them, so that part of the invoice stays unpaid until the money is recorded.`);
+      warnings.push(`Left open: record the day's ${[p.cash ? `cash ${p.cash.toFixed(2)}` : '', p.gcash ? `GCash ${p.gcash.toFixed(2)}` : '', p.gc_used ? `gift certificates ${p.gc_used.toFixed(2)}` : ''].filter(Boolean).join(', ') || 'payments'} with Pay on the invoice.`);
     } else if (s.z) {
       // The Z-Reading's amounts are under .figures (lib/posZReading.js).
       const z = s.z.figures || {};
